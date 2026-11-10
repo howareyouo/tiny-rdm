@@ -41,10 +41,24 @@ type entryCursor struct {
 	XLast   string // last stream pos
 }
 
+// scanCursor holds the SCAN cursors of a scan, a cluster keeps one cursor per master node
+// keyed by node address, other modes use a single cursor stored under the empty key
+type scanCursor map[string]uint64
+
+// end reports whether every cursor reached the end of its scan
+func (c scanCursor) end() bool {
+	for _, cursor := range c {
+		if cursor != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 type connectionItem struct {
 	*sessionItem
 	mutex       sync.Mutex
-	cursor      map[int]uint64      // current cursor of databases
+	cursor      map[int]scanCursor    // current cursor of databases
 	entryCursor map[int]entryCursor // current entry cursor of databases
 }
 
@@ -292,7 +306,7 @@ func (b *browserService) getPagingItem(sess *sessionItem) *connectionItem {
 	}
 	item := &connectionItem{
 		sessionItem: sess,
-		cursor:      map[int]uint64{},
+		cursor:      map[int]scanCursor{},
 		entryCursor: map[int]entryCursor{},
 	}
 	b.connMap[sess.name] = item
@@ -306,7 +320,7 @@ func (b *browserService) loadDBSize(ctx context.Context, client redis.UniversalC
 }
 
 // save current scan cursor
-func (b *browserService) setClientCursor(server string, db int, cursor uint64) {
+func (b *browserService) setClientCursor(server string, db int, cursor scanCursor) {
 	b.mutex.Lock()
 	item, ok := b.connMap[server]
 	b.mutex.Unlock()
@@ -316,10 +330,10 @@ func (b *browserService) setClientCursor(server string, db int, cursor uint64) {
 }
 
 // setClientCursor saves the scan cursor of a database
-func (item *connectionItem) setClientCursor(db int, cursor uint64) {
+func (item *connectionItem) setClientCursor(db int, cursor scanCursor) {
 	item.mutex.Lock()
 	defer item.mutex.Unlock()
-	if cursor == 0 {
+	if cursor.end() {
 		delete(item.cursor, db)
 	} else {
 		item.cursor[db] = cursor
@@ -418,7 +432,7 @@ func (b *browserService) ServerInfo(name string) (resp types.JSResp) {
 // OpenDatabase open select database, and list all keys
 // @param path contain connection name and db name
 func (b *browserService) OpenDatabase(server string, db int) (resp types.JSResp) {
-	b.setClientCursor(server, db, 0)
+	b.setClientCursor(server, db, nil)
 
 	item, err := b.getRedisClient(server, db)
 	if err != nil {
@@ -436,15 +450,16 @@ func (b *browserService) OpenDatabase(server string, db int) (resp types.JSResp)
 }
 
 // scan keys
+// @param cursors scan cursors to start from, nil to start a new scan
 // @return loaded keys
-// @return next cursor
+// @return next cursors, one per master in cluster mode, end reports whether the scan finished
 // @return scan error
-func (b *browserService) scanKeys(ctx context.Context, client redis.UniversalClient, match, keyType string, cursor uint64, count int64) ([]any, uint64, error) {
-	var err error
+func (b *browserService) scanKeys(ctx context.Context, client redis.UniversalClient, match, keyType string, cursors scanCursor, count int64) ([]any, scanCursor, error) {
 	filterType := len(keyType) > 0
 	scanSize := int64(Preferences().GetScanSize())
-	// define sub scan function
-	scan := func(ctx context.Context, cli redis.UniversalClient, count int64, appendFunc func(k []any)) error {
+	// define sub scan function, it scans with a single cursor and returns the last one
+	scan := func(ctx context.Context, cli redis.UniversalClient, cursor uint64, count int64, appendFunc func(k []any)) (uint64, error) {
+		var err error
 		var loadedKey []string
 		var scanCount int64
 		for {
@@ -454,49 +469,72 @@ func (b *browserService) scanKeys(ctx context.Context, client redis.UniversalCli
 				loadedKey, cursor, err = cli.Scan(ctx, cursor, match, scanSize).Result()
 			}
 			if err != nil {
-				return err
-			} else {
-				ks := sliceutil.Map(loadedKey, func(i int) any {
-					return strutil.EncodeRedisKey(loadedKey[i])
-				})
-				scanCount += int64(len(ks))
-				appendFunc(ks)
+				return cursor, err
 			}
+
+			ks := sliceutil.Map(loadedKey, func(i int) any {
+				return strutil.EncodeRedisKey(loadedKey[i])
+			})
+			scanCount += int64(len(ks))
+			appendFunc(ks)
 
 			if (count > 0 && scanCount > count) || cursor == 0 {
 				break
 			}
 		}
-		return nil
+		return cursor, nil
 	}
 
 	keys := make([]any, 0)
+	next := make(scanCursor)
 	if cluster, ok := client.(*redis.ClusterClient); ok {
-		// cluster mode
+		// cluster mode, every master node scans with its own cursor
 		var mutex sync.Mutex
-		var totalMaster int64
+		// ForEachMaster calls the callback concurrently, so count the masters atomically
+		var masterCount atomic.Int64
 		cluster.ForEachMaster(ctx, func(ctx context.Context, cli *redis.Client) error {
-			totalMaster += 1
+			masterCount.Add(1)
 			return nil
 		})
-		partCount := count / max(totalMaster, 1)
-		err = cluster.ForEachMaster(ctx, func(ctx context.Context, cli *redis.Client) error {
-			// FIXME: BUG? can not fully load in cluster mode? maybe remove the shared "cursor"
-			return scan(ctx, cli, partCount, func(k []any) {
+		partCount := count / max(masterCount.Load(), 1)
+		err := cluster.ForEachMaster(ctx, func(ctx context.Context, cli *redis.Client) error {
+			addr := cli.Options().Addr
+			cursor, known := cursors[addr]
+			if known && cursor == 0 {
+				// this master finished in an earlier round, scanning it again would repeat its keys
+				mutex.Lock()
+				next[addr] = 0
+				mutex.Unlock()
+				return nil
+			}
+			nextCursor, scanErr := scan(ctx, cli, cursor, partCount, func(k []any) {
 				mutex.Lock()
 				keys = append(keys, k...)
 				mutex.Unlock()
 			})
+			if scanErr != nil {
+				return scanErr
+			}
+			mutex.Lock()
+			next[addr] = nextCursor
+			mutex.Unlock()
+			return nil
 		})
+		if err != nil {
+			return keys, cursors, err
+		}
 	} else {
-		err = scan(ctx, client, count, func(k []any) {
+		cursor, err := scan(ctx, client, cursors[""], count, func(k []any) {
 			keys = append(keys, k...)
 		})
+		if err != nil {
+			return keys, cursors, err
+		}
+		if cursor != 0 {
+			next[""] = cursor
+		}
 	}
-	if err != nil {
-		return keys, cursor, err
-	}
-	return keys, cursor, nil
+	return keys, next, nil
 }
 
 // check if key exists
@@ -543,7 +581,8 @@ func (b *browserService) LoadNextKeys(server string, db int, match, keyType stri
 			matchKeys = []any{match}
 			maxKeys = 1
 		}
-		b.setClientCursor(server, db, 0)
+		cursor = nil
+		b.setClientCursor(server, db, cursor)
 	} else {
 		matchKeys, cursor, err = b.scanKeys(ctx, client, match, keyType, cursor, count)
 		if err != nil {
@@ -561,7 +600,7 @@ func (b *browserService) LoadNextKeys(server string, db int, match, keyType stri
 	resp.Success = true
 	resp.Data = map[string]any{
 		"keys":    matchKeys,
-		"end":     cursor == 0,
+		"end":     cursor.end(),
 		"maxKeys": maxKeys,
 	}
 	return
@@ -591,7 +630,7 @@ func (b *browserService) LoadNextAllKeys(server string, db int, match, keyType s
 			resp.Msg = err.Error()
 			return
 		}
-		b.setClientCursor(server, db, 0)
+		b.setClientCursor(server, db, nil)
 		if fullScan {
 			maxKeys = b.loadDBSize(ctx, client)
 		} else {
@@ -623,7 +662,7 @@ func (b *browserService) LoadAllKeys(server string, db int, match, keyType strin
 			matchKeys = []any{match}
 		}
 	} else {
-		matchKeys, _, err = b.scanKeys(ctx, client, match, keyType, 0, 0)
+		matchKeys, _, err = b.scanKeys(ctx, client, match, keyType, nil, 0)
 		if err != nil {
 			resp.Msg = err.Error()
 			return
@@ -1910,7 +1949,7 @@ func (b *browserService) AddStreamValue(server string, db int, k any, ID string,
 	}
 
 	updateValues := make(map[string]any, len(fieldItems)/2)
-	for i := 0; i < len(fieldItems)/2; i += 2 {
+	for i := 0; i+1 < len(fieldItems); i += 2 {
 		updateValues[fieldItems[i].(string)] = fieldItems[i+1]
 	}
 	vb, _ := json.Marshal(updateValues)
@@ -1996,11 +2035,6 @@ func (b *browserService) BatchSetTTL(server string, db int, ks []any, ttl int64,
 	ctx, cancelFunc := context.WithCancel(b.ctx)
 	defer cancelFunc()
 
-	//cancelEvent := "ttling:stop:" + serialNo
-	//runtime.EventsOnce(ctx, cancelEvent, func(data ...any) {
-	//	cancelFunc()
-	//})
-	//processEvent := "ttling:" + serialNo
 	total := len(ks)
 	var failed, updated atomic.Int64
 	var canceled bool
@@ -2009,15 +2043,8 @@ func (b *browserService) BatchSetTTL(server string, db int, ks []any, ttl int64,
 	del := func(ctx context.Context, cli redis.UniversalClient) error {
 		startTime := time.Now().Add(-10 * time.Second)
 		for i, k := range ks {
-			// emit progress per second
-			//param := map[string]any{
-			//	"total":      total,
-			//	"progress":   i + 1,
-			//	"processing": k,
-			//}
 			if i >= total-1 || time.Now().Sub(startTime).Milliseconds() > 100 {
 				startTime = time.Now()
-				//EventsEmit(ctx, processEvent, param)
 				// do some sleep to prevent blocking the Redis server
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -2052,7 +2079,6 @@ func (b *browserService) BatchSetTTL(server string, db int, ks []any, ttl int64,
 		err = del(ctx, client)
 	}
 
-	//runtime.EventsOff(ctx, cancelEvent)
 	resp.Success = true
 	resp.Data = struct {
 		Canceled bool  `json:"canceled"`
@@ -2192,7 +2218,6 @@ func (b *browserService) DeleteKeys(server string, db int, ks []any, serialNo st
 		resp.Msg = err.Error()
 		return
 	}
-	client := item.client
 	ctx, cancelFunc := context.WithCancel(b.ctx)
 	defer cancelFunc()
 
@@ -2200,9 +2225,28 @@ func (b *browserService) DeleteKeys(server string, db int, ks []any, serialNo st
 	cancelStopEvent := EventsOnce(ctx, cancelEvent, func(data ...any) {
 		cancelFunc()
 	})
+
+	deletedKeys, canceled := deleteKeysBatched(ctx, item.client, ks)
+	cancelStopEvent()
+
+	resp.Success = true
+	resp.Data = struct {
+		Canceled bool `json:"canceled"`
+		Deleted  any  `json:"deleted"`
+		Failed   int  `json:"failed"`
+	}{
+		Canceled: canceled,
+		Deleted:  deletedKeys,
+		Failed:   len(ks) - len(deletedKeys),
+	}
+	return
+}
+
+// deleteKeysBatched deletes keys in batches and returns the keys deleted successfully
+func deleteKeysBatched(ctx context.Context, client redis.UniversalClient, ks []any) ([]any, bool) {
 	total := len(ks)
 	var canceled bool
-	var deletedKeys = make([]any, 0, total)
+	deletedKeys := make([]any, 0, total)
 	var mutex sync.Mutex
 	del := func(ctx context.Context, cli redis.UniversalClient) error {
 		const batchSize = 1000
@@ -2232,25 +2276,13 @@ func (b *browserService) DeleteKeys(server string, db int, ks []any, serialNo st
 
 	if cluster, ok := client.(*redis.ClusterClient); ok {
 		// cluster mode
-		err = cluster.ForEachMaster(ctx, func(ctx context.Context, cli *redis.Client) error {
+		_ = cluster.ForEachMaster(ctx, func(ctx context.Context, cli *redis.Client) error {
 			return del(ctx, cli)
 		})
 	} else {
-		err = del(ctx, client)
+		_ = del(ctx, client)
 	}
-
-	cancelStopEvent()
-	resp.Success = true
-	resp.Data = struct {
-		Canceled bool `json:"canceled"`
-		Deleted  any  `json:"deleted"`
-		Failed   int  `json:"failed"`
-	}{
-		Canceled: canceled,
-		Deleted:  deletedKeys,
-		Failed:   len(ks) - len(deletedKeys),
-	}
-	return
+	return deletedKeys, canceled
 }
 
 // DeleteKeysByPattern delete keys by pattern
@@ -2265,50 +2297,13 @@ func (b *browserService) DeleteKeysByPattern(server string, db int, pattern stri
 	defer cancelFunc()
 
 	var ks []any
-	ks, _, err = b.scanKeys(ctx, client, pattern, "", 0, 0)
+	ks, _, err = b.scanKeys(ctx, client, pattern, "", nil, 0)
 	if err != nil {
 		resp.Msg = err.Error()
 		return
 	}
 
-	total := len(ks)
-	var canceled bool
-	var deletedKeys = make([]any, 0, total)
-	var mutex sync.Mutex
-	del := func(ctx context.Context, cli redis.UniversalClient) error {
-		const batchSize = 1000
-		for i := 0; i < total; i += batchSize {
-			pipe := cli.Pipeline()
-			for j := 0; j < batchSize; j++ {
-				if i+j < total {
-					pipe.Del(ctx, strutil.DecodeRedisKey(ks[i+j]))
-				}
-			}
-			cmders, delErr := pipe.Exec(ctx)
-			for j, cmder := range cmders {
-				if cmder.(*redis.IntCmd).Val() == 1 {
-					// save deleted key
-					mutex.Lock()
-					deletedKeys = append(deletedKeys, ks[i+j])
-					mutex.Unlock()
-				}
-			}
-			if errors.Is(delErr, context.Canceled) || canceled {
-				canceled = true
-				break
-			}
-		}
-		return nil
-	}
-
-	if cluster, ok := client.(*redis.ClusterClient); ok {
-		// cluster mode
-		err = cluster.ForEachMaster(ctx, func(ctx context.Context, cli *redis.Client) error {
-			return del(ctx, cli)
-		})
-	} else {
-		err = del(ctx, client)
-	}
+	deletedKeys, canceled := deleteKeysBatched(ctx, client, ks)
 
 	resp.Success = true
 	resp.Data = struct {
@@ -2593,7 +2588,7 @@ func (b *browserService) GetCmdHistory(pageNo, pageSize int) (resp types.JSResp)
 		}
 	} else {
 		total := len(b.cmdHistory)
-		startIndex := total / pageSize * (pageNo - 1)
+		startIndex := min((pageNo-1)*pageSize, total)
 		endIndex := min(startIndex+pageSize, total)
 		resp.Data = map[string]any{
 			"list":     b.cmdHistory[startIndex:endIndex],
@@ -2628,7 +2623,7 @@ func (b *browserService) GetSlowLogs(server string, num int64) (resp types.JSRes
 		// cluster mode
 		var mu sync.Mutex
 		err = cluster.ForEachShard(ctx, func(ctx context.Context, cli *redis.Client) error {
-			if subLogs, _ := client.SlowLogGet(ctx, num).Result(); len(subLogs) > 0 {
+			if subLogs, _ := cli.SlowLogGet(ctx, num).Result(); len(subLogs) > 0 {
 				mu.Lock()
 				logs = append(logs, subLogs...)
 				mu.Unlock()

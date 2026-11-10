@@ -45,28 +45,6 @@ export function hexGammaCorrection(rgb, gamma) {
 }
 
 /**
- * mix two colors
- * @param rgba1
- * @param rgba2
- * @param weight
- * @return {{a: number, r: number, b: number, g: number}}
- */
-export function mixColors(rgba1, rgba2, weight = 0.5) {
-    if (rgba1.a === undefined) {
-        rgba1.a = 255
-    }
-    if (rgba2.a === undefined) {
-        rgba2.a = 255
-    }
-    return {
-        r: Math.floor(rgba1.r * (1 - weight) + rgba2.r * weight),
-        g: Math.floor(rgba1.g * (1 - weight) + rgba2.g * weight),
-        b: Math.floor(rgba1.b * (1 - weight) + rgba2.b * weight),
-        a: Math.floor(rgba1.a * (1 - weight) + rgba2.a * weight),
-    }
-}
-
-/**
  * RGB object to hex color string
  * @param {RGB} rgb
  * @return {string}

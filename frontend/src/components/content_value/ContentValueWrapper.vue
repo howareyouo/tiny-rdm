@@ -6,7 +6,6 @@ import ContentValueList from '@/components/content_value/ContentValueList.vue'
 import ContentValueSet from '@/components/content_value/ContentValueSet.vue'
 import ContentValueZset from '@/components/content_value/ContentValueZSet.vue'
 import ContentValueStream from '@/components/content_value/ContentValueStream.vue'
-import { useThemeVars } from 'naive-ui'
 import useBrowserStore from 'stores/browser.js'
 import { computed, onMounted, ref, watch } from 'vue'
 import { isEmpty } from 'lodash'
@@ -18,7 +17,6 @@ import usePreferencesStore from 'stores/preferences.js'
 import { TextAlignType } from '@/consts/text_align_type.js'
 import { isMacOS } from '@/utils/platform.js'
 
-const themeVars = useThemeVars()
 const browserStore = useBrowserStore()
 const dialogStore = useDialogStore()
 const prefStore = usePreferencesStore()

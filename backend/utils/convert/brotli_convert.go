@@ -1,7 +1,6 @@
 package convutil
 
 import (
-	"bytes"
 	"io"
 	"strings"
 
@@ -11,20 +10,9 @@ import (
 type BrotliConvert struct{}
 
 func (BrotliConvert) Encode(str string) (string, bool) {
-	var compress = func(b []byte) (string, error) {
-		var buf bytes.Buffer
-		writer := brotli.NewWriter(&buf)
-		if _, err := writer.Write([]byte(str)); err != nil {
-			writer.Close()
-			return "", err
-		}
-		writer.Close()
-		return string(buf.Bytes()), nil
-	}
-	if brotliStr, err := compress([]byte(str)); err == nil {
-		return brotliStr, true
-	}
-	return str, false
+	return compressWith(str, func(w io.Writer) (io.WriteCloser, error) {
+		return brotli.NewWriter(w), nil
+	})
 }
 
 func (BrotliConvert) Decode(str string) (string, bool) {

@@ -1,7 +1,6 @@
 package convutil
 
 import (
-	"bytes"
 	"io"
 	"strings"
 
@@ -11,23 +10,9 @@ import (
 type DeflateConvert struct{}
 
 func (d DeflateConvert) Encode(str string) (string, bool) {
-	var compress = func(b []byte) (string, error) {
-		var buf bytes.Buffer
-		writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
-		if err != nil {
-			return "", err
-		}
-		if _, err = writer.Write([]byte(str)); err != nil {
-			writer.Close()
-			return "", err
-		}
-		writer.Close()
-		return string(buf.Bytes()), nil
-	}
-	if deflateStr, err := compress([]byte(str)); err == nil {
-		return deflateStr, true
-	}
-	return str, false
+	return compressWith(str, func(w io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(w, flate.DefaultCompression)
+	})
 }
 
 func (d DeflateConvert) Decode(str string) (string, bool) {

@@ -103,38 +103,45 @@ export async function ExportConnections() {
     }
 }
 
-export async function ImportConnections() {
-    // Web mode: open file picker, upload zip to backend
+// Pick a local file in the browser and upload it to the backend
+function pickAndUpload(path, accept, failMsg) {
     return new Promise((resolve) => {
         const input = document.createElement('input')
         input.type = 'file'
-        input.accept = '.zip'
+        if (accept) {
+            input.accept = accept
+        }
         input.onchange = async () => {
-            if (input.files && input.files[0]) {
-                const formData = new FormData()
-                formData.append('file', input.files[0])
-                try {
-                    const resp = await fetch(`${API_BASE}/connection/import-upload`, {
-                        method: 'POST',
-                        credentials: 'same-origin',
-                        body: formData,
-                    })
-                    if (resp.status === 401) {
-                        resolve(unauthorized())
-                        return
-                    }
-                    resolve(await resp.json())
-                } catch {
-                    resolve({ success: false, msg: 'import failed' })
-                }
-            } else {
+            if (!input.files || !input.files[0]) {
                 resolve({ success: false, msg: '' })
+                return
+            }
+            const formData = new FormData()
+            formData.append('file', input.files[0])
+            try {
+                const resp = await fetch(`${API_BASE}${path}`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: formData,
+                })
+                if (resp.status === 401) {
+                    resolve(unauthorized())
+                    return
+                }
+                resolve(await resp.json())
+            } catch {
+                resolve({ success: false, msg: failMsg })
             }
         }
         // User cancelled file picker
         input.addEventListener('cancel', () => resolve({ success: false, msg: '' }))
         input.click()
     })
+}
+
+export function ImportConnections() {
+    // Web mode: open file picker, upload zip to backend
+    return pickAndUpload('/connection/import-upload', '.zip', 'import failed')
 }
 
 export function ParseConnectURL(url) {
@@ -400,38 +407,12 @@ export function Info() {
 }
 
 // Web replacement for native file dialog
-export async function SelectFile(title, ext) {
-    return new Promise((resolve) => {
-        const input = document.createElement('input')
-        input.type = 'file'
-        if (ext && Array.isArray(ext) && ext.length > 0) {
-            input.accept = ext.map((e) => '.' + e.replace(/^\./, '')).join(',')
-        }
-        input.onchange = async () => {
-            if (input.files && input.files[0]) {
-                const formData = new FormData()
-                formData.append('file', input.files[0])
-                try {
-                    const resp = await fetch(`${API_BASE}/system/select-file`, {
-                        method: 'POST',
-                        credentials: 'same-origin',
-                        body: formData,
-                    })
-                    if (resp.status === 401) {
-                        resolve(unauthorized())
-                        return
-                    }
-                    resolve(await resp.json())
-                } catch {
-                    resolve({ success: false, msg: 'upload failed' })
-                }
-            } else {
-                resolve({ success: false, msg: '' })
-            }
-        }
-        input.addEventListener('cancel', () => resolve({ success: false, msg: '' }))
-        input.click()
-    })
+export function SelectFile(title, ext) {
+    let accept = ''
+    if (ext && Array.isArray(ext) && ext.length > 0) {
+        accept = ext.map((e) => '.' + e.replace(/^\./, '')).join(',')
+    }
+    return pickAndUpload('/system/select-file', accept, 'upload failed')
 }
 
 export async function SaveFile(title, defaultName, ext) {

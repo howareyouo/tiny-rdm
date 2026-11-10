@@ -1,7 +1,6 @@
 package convutil
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -10,16 +9,10 @@ import (
 type BitSetConvert struct{}
 
 func (BitSetConvert) Encode(str string) (string, bool) {
-	var result strings.Builder
-
 	str = strings.ReplaceAll(str, "\r\n", "\n") // CRLF → LF
 	str = strings.ReplaceAll(str, "\r", "\n")   // CR → LF
 
-	lines := strings.Split(str, "\n")
-	bytes := encodeToRedisBitset(lines)
-	result.Write(bytes)
-
-	return result.String(), true
+	return string(encodeToRedisBitset(strings.Split(str, "\n"))), true
 }
 
 func (BitSetConvert) Decode(str string) (string, bool) {
@@ -31,7 +24,7 @@ func (BitSetConvert) Decode(str string) (string, bool) {
 			if binBuilder.Len() > 0 {
 				binBuilder.WriteByte('\n')
 			}
-			binBuilder.WriteString(fmt.Sprintf("%d", pos))
+			binBuilder.WriteString(strconv.Itoa(pos))
 		}
 	}
 

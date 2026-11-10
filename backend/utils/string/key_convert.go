@@ -68,9 +68,8 @@ func AnyToInt(val any) (int, bool) {
 	case bool:
 		if val.(bool) {
 			return 1, true
-		} else {
-			return 0, true
 		}
+		return 0, true
 	}
 	return 0, false
 }

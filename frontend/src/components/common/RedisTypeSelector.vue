@@ -1,6 +1,6 @@
 <script setup>
 import { computed, h } from 'vue'
-import { NSpace, useThemeVars } from 'naive-ui'
+import { NSpace } from 'naive-ui'
 import { types, typesBgColor, typesColor, typesShortName } from '@/consts/support_redis_type.js'
 import { get, isEmpty, map, toUpper } from 'lodash'
 import RedisTypeTag from '@/components/common/RedisTypeTag.vue'
@@ -34,7 +34,6 @@ const options = computed(() => {
     return [{ label: 'ALL', key: 'ALL' }, ...opts]
 })
 
-const themeVars = useThemeVars()
 const renderIcon = (option) => {
     return h(RedisTypeTag, {
         type: option.key,

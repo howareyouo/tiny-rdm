@@ -50,8 +50,6 @@ export const typesBgColor = {
     [types.JSON]: '#ECECD9',
 }
 
-// export const typesName = Object.fromEntries(Object.entries(types).map(([key, value]) => [key, value.name]))
-
 export const validType = (t) => {
     return types.hasOwnProperty(t)
 }

@@ -12,7 +12,6 @@ import (
 )
 
 type HttpProxy struct {
-	scheme  string       // HTTP Proxy scheme
 	host    string       // HTTP Proxy host or host:port
 	auth    *proxy.Auth  // authentication
 	forward proxy.Dialer // forwarding Dialer
@@ -82,7 +81,6 @@ func NewHttpProxyDialer(u *url.URL, forward proxy.Dialer) (proxy.Dialer, error) 
 	}
 
 	hp := &HttpProxy{
-		scheme:  u.Scheme,
 		host:    u.Host,
 		auth:    auth,
 		forward: forward,

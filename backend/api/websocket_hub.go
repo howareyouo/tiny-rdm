@@ -39,13 +39,11 @@ var hub *WSHub
 var onceHub sync.Once
 
 func Hub() *WSHub {
-	if hub == nil {
-		onceHub.Do(func() {
-			hub = &WSHub{
-				clients: make(map[*websocket.Conn]bool),
-			}
-		})
-	}
+	onceHub.Do(func() {
+		hub = &WSHub{
+			clients: make(map[*websocket.Conn]bool),
+		}
+	})
 	return hub
 }
 

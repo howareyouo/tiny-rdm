@@ -106,31 +106,6 @@ func AnyToString(value interface{}, prefix string, layer int) (s string) {
 	return
 }
 
-//func AnyToHex(val any) (string, bool) {
-//	var src string
-//	switch val.(type) {
-//	case string:
-//		src = val.(string)
-//	case []byte:
-//		src = string(val.([]byte))
-//	}
-//
-//	if len(src) <= 0 {
-//		return "", false
-//	}
-//
-//	var output strings.Builder
-//	for i := range src {
-//		if !utf8.ValidString(src[i : i+1]) {
-//			output.WriteString(fmt.Sprintf("\\x%02x", src[i:i+1]))
-//		} else {
-//			output.WriteString(src[i : i+1])
-//		}
-//	}
-//
-//	return output.String(), true
-//}
-
 func SplitCmd(cmd string) []string {
 	var result []string
 	var curStr strings.Builder

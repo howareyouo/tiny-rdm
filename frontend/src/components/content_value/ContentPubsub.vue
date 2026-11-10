@@ -3,7 +3,6 @@ import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref } from 'vu
 import { debounce, get, isEmpty, size, uniq } from 'lodash'
 import { useI18n } from 'vue-i18n'
 import { useThemeVars } from 'naive-ui'
-import useBrowserStore from 'stores/browser.js'
 import { ClipboardSetText, EventsOff, EventsOn } from 'wailsjs/runtime/runtime.js'
 import dayjs from 'dayjs'
 import Publish from '@/components/icons/Publish.vue'
@@ -16,9 +15,6 @@ import Bottom from '@/components/icons/Bottom.vue'
 import IconButton from '@/components/common/IconButton.vue'
 import EditableTableColumn from '@/components/common/EditableTableColumn.vue'
 
-const themeVars = useThemeVars()
-
-const browserStore = useBrowserStore()
 const i18n = useI18n()
 const props = defineProps({
     server: {

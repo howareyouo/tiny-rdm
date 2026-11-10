@@ -1,7 +1,6 @@
 package convutil
 
 import (
-	"bytes"
 	"io"
 	"strings"
 
@@ -11,23 +10,9 @@ import (
 type ZStdConvert struct{}
 
 func (ZStdConvert) Encode(str string) (string, bool) {
-	var compress = func(b []byte) (string, error) {
-		var buf bytes.Buffer
-		writer, err := zstd.NewWriter(&buf)
-		if err != nil {
-			return "", err
-		}
-		if _, err = writer.Write([]byte(str)); err != nil {
-			writer.Close()
-			return "", err
-		}
-		writer.Close()
-		return string(buf.Bytes()), nil
-	}
-	if zstdStr, err := compress([]byte(str)); err == nil {
-		return zstdStr, true
-	}
-	return str, false
+	return compressWith(str, func(w io.Writer) (io.WriteCloser, error) {
+		return zstd.NewWriter(w)
+	})
 }
 
 func (ZStdConvert) Decode(str string) (string, bool) {

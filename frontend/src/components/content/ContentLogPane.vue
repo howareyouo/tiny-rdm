@@ -6,10 +6,7 @@ import { map, size, split, uniqBy } from 'lodash'
 import { useI18n } from 'vue-i18n'
 import Delete from '@/components/icons/Delete.vue'
 import dayjs from 'dayjs'
-import { useThemeVars } from 'naive-ui'
 import useBrowserStore from 'stores/browser.js'
-
-const themeVars = useThemeVars()
 
 const browserStore = useBrowserStore()
 const i18n = useI18n()

@@ -66,30 +66,32 @@ func decodeWith(str, decodeType string, customDecoder []CmdConvert) (value, resu
 	return
 }
 
+// pure digit content may be incorrectly recognized as some encoded type
+var pureDigitRegex = regexp.MustCompile(`^\d+$`)
+
 // attempt try possible decode method
 // if no decode is possible, it will return the origin string value and "none" decode type
 func autoDecode(str string, customDecoder []CmdConvert) (value, resultDecode string) {
-	if len(str) > 0 {
-		// pure digit content may incorrect regard as some encoded type, skip decode
-		if match, _ := regexp.MatchString(`^\d+$`, str); !match {
-			for _, converter := range autoDecoders {
-				// FIXME: deflate and brotli keep disabled for auto detection
-				// due to incorrect format checking
-				if !converter.canDetect(str) {
-					continue
-				}
-				if decodedStr, ok := converter.Convert.Decode(str); ok {
-					return decodedStr, converter.Label
-				}
-			}
+	if len(str) <= 0 || pureDigitRegex.MatchString(str) {
+		return str, types.DECODE_NONE
+	}
 
-			// try decode with custom decoder
-			for _, decoder := range customDecoder {
-				if decoder.Auto {
-					if decodedStr, ok := decoder.Decode(str); ok {
-						return decodedStr, decoder.Name
-					}
-				}
+	for _, converter := range autoDecoders {
+		// FIXME: deflate and brotli keep disabled for auto detection
+		// due to incorrect format checking
+		if !converter.canDetect(str) {
+			continue
+		}
+		if decodedStr, ok := converter.Convert.Decode(str); ok {
+			return decodedStr, converter.Label
+		}
+	}
+
+	// try decode with custom decoder
+	for _, decoder := range customDecoder {
+		if decoder.Auto {
+			if decodedStr, ok := decoder.Decode(str); ok {
+				return decodedStr, decoder.Name
 			}
 		}
 	}

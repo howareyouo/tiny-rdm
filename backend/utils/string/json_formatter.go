@@ -82,9 +82,7 @@ func format(value string, indent string, newLine string, separator string) strin
 				formatted.WriteString(strings.Repeat(indent, max(0, indentLevel)))
 				formatted.WriteRune(*char)
 			case '"':
-				str := consumeString(chars)
-				//str = convertUnicodeString(str)
-				formatted.WriteString(str)
+				formatted.WriteString(consumeString(chars))
 			case ',':
 				consumeWhitespaces(chars)
 				formatted.WriteRune(',')
@@ -145,14 +143,4 @@ func consumeString(iter *ArrayIterator[rune]) string {
 	}
 
 	return sb.String()
-}
-
-func convertUnicodeString(str string) string {
-	// TODO: quote UTF-16 characters
-	//if len(str) > 2 {
-	//	if unqStr, err := strconv.Unquote(str); err == nil {
-	//		return strconv.Quote(unqStr)
-	//	}
-	//}
-	return str
 }

@@ -115,7 +115,6 @@ func (p *PreferencesStorage) UpdatePreferences(values map[string]any) error {
 			return err
 		}
 	}
-	log.Println("after save", pf)
 
 	return p.savePreferences(&pf)
 }

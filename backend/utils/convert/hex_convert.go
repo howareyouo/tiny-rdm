@@ -8,9 +8,7 @@ import (
 type HexConvert struct{}
 
 func (HexConvert) Encode(str string) (string, bool) {
-	hexStrArr := strings.Split(str, "\\x")
-	hexStr := strings.Join(hexStrArr, "")
-	if decodeStr, err := hex.DecodeString(hexStr); err == nil {
+	if decodeStr, err := hex.DecodeString(strings.ReplaceAll(str, "\\x", "")); err == nil {
 		return string(decodeStr), true
 	}
 

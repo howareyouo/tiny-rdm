@@ -54,7 +54,6 @@ const keyName = computed(() => {
 
 const browserStore = useBrowserStore()
 const dialogStore = useDialogStore()
-const keyType = redisTypes.SET
 
 const valueFilter = (filterValue, row) => {
     if (isEmpty(filterValue)) {

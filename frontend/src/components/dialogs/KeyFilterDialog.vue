@@ -2,7 +2,6 @@
 import { computed, reactive, ref, watchEffect } from 'vue'
 import useDialog from 'stores/dialog'
 import { types } from '@/consts/support_redis_type.js'
-import useBrowserStore from 'stores/browser.js'
 
 const filterForm = reactive({
     server: '',

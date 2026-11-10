@@ -87,10 +87,6 @@ func (a *gaService) sendEvent(events ...GaEventItem) error {
 	}
 	defer response.Body.Close()
 
-	//if dump, err := httputil.DumpResponse(response, true); err == nil {
-	//	log.Println(string(dump))
-	//}
-
 	return nil
 }
 

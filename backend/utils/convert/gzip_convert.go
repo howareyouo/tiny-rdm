@@ -1,7 +1,6 @@
 package convutil
 
 import (
-	"bytes"
 	"io"
 	"strings"
 
@@ -11,21 +10,9 @@ import (
 type GZipConvert struct{}
 
 func (GZipConvert) Encode(str string) (string, bool) {
-	var compress = func(b []byte) (string, error) {
-		var buf bytes.Buffer
-		writer := gzip.NewWriter(&buf)
-		if _, err := writer.Write([]byte(str)); err != nil {
-			writer.Close()
-			return "", err
-		}
-		writer.Close()
-		return string(buf.Bytes()), nil
-	}
-
-	if gzipStr, err := compress([]byte(str)); err == nil {
-		return gzipStr, true
-	}
-	return str, false
+	return compressWith(str, func(w io.Writer) (io.WriteCloser, error) {
+		return gzip.NewWriter(w), nil
+	})
 }
 
 func (GZipConvert) Decode(str string) (string, bool) {

@@ -3,7 +3,7 @@ import { computed, h, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AddLink from '@/components/icons/AddLink.vue'
 import { NButton, NIcon, useThemeVars } from 'naive-ui'
-import { types, types as redisTypes } from '@/consts/support_redis_type.js'
+import { types } from '@/consts/support_redis_type.js'
 import EditableTableColumn from '@/components/common/EditableTableColumn.vue'
 import useDialogStore from 'stores/dialog.js'
 import { includes, isEmpty, size } from 'lodash'
@@ -59,11 +59,9 @@ const emit = defineEmits(['loadmore', 'loadall', 'reload', 'match'])
 const keyName = computed(() => {
     return !isEmpty(props.keyCode) ? props.keyCode : props.keyPath
 })
-const filterType = ref(1)
 
 const browserStore = useBrowserStore()
 const dialogStore = useDialogStore()
-const keyType = redisTypes.STREAM
 const idColumn = computed(() => ({
     key: 'id',
     title: 'ID',
