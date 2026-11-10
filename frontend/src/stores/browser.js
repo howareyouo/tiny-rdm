@@ -197,37 +197,6 @@ const useBrowserStore = defineStore('browser', {
         },
 
         /**
-         * switch key view
-         * @param {string} connName
-         * @param {number} viewType
-         */
-        // async switchKeyView(connName, viewType) {
-        //     if (viewType !== KeyViewType.Tree && viewType !== KeyViewType.List) {
-        //         return
-        //     }
-        //
-        //     const t = get(this.viewType, connName, KeyViewType.Tree)
-        //     if (t === viewType) {
-        //         return
-        //     }
-        //
-        //     this.viewType[connName] = viewType
-        //     const dbs = get(this.databases, connName, [])
-        //     for (const dbItem of dbs) {
-        //         if (!dbItem.opened) {
-        //             continue
-        //         }
-        //
-        //         dbItem.children = undefined
-        //         dbItem.keyCount = 0
-        //         const { db = 0 } = dbItem
-        //         this._getNodeMap(connName, db).clear()
-        //         this._addKeyNodes(connName, db, keys)
-        //         this._tidyNode(connName, db, '')
-        //     }
-        // },
-
-        /**
          * open connection
          * @param {string} name
          * @param {boolean} [reload]
@@ -752,7 +721,7 @@ const useBrowserStore = defineStore('browser', {
          */
         getSeparator(server) {
             const connStore = useConnectionStore()
-            const { keySeparator } = connStore.getDefaultSeparator(server)
+            const keySeparator = connStore.getDefaultSeparator(server)
             if (isEmpty(keySeparator)) {
                 return ':'
             }
@@ -887,6 +856,35 @@ const useBrowserStore = defineStore('browser', {
         },
 
         /**
+         * apply value mutation with the strategy of the value type
+         * @param {Object} args action arguments
+         * @param {{call: function(Object): Promise<*>, apply: function(Object, Object, Object): Object, [reloadOnlyWhenApplied]: boolean}} mutation
+         * @returns {Promise<{msg?: string, success: boolean}>}
+         * @private
+         */
+        async _mutateValue(args, { call, apply, reloadOnlyWhenApplied }) {
+            const { server, db, key, reload } = args
+            try {
+                const { data, success, msg } = await call(args)
+                if (!success) {
+                    return { success, msg }
+                }
+                const { applied = true, ...result } = apply(useTabStore(), args, data)
+                if (reloadOnlyWhenApplied !== true || applied) {
+                    if (reload === true) {
+                        this.reloadKey({ server, db, key })
+                    } else {
+                        // reload summary only
+                        this.loadKeySummary({ server, db, key })
+                    }
+                }
+                return { success, ...result }
+            } catch (e) {
+                return { success: false, msg: e.message }
+            }
+        },
+
+        /**
          * update hash entry
          * when field is set, newField is null, delete field
          * when field is null, newField is set, add new field
@@ -907,72 +905,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean, [updated]: {}}>}
          */
-        async setHash({
-            server,
-            db,
-            key,
-            field,
-            newField = '',
-            value = '',
-            decode = decodeTypes.NONE,
-            format = formatTypes.RAW,
-            retDecode,
-            retFormat,
-            index,
-            reload,
-        }) {
-            try {
-                const { data, success, msg } = await SetHashValue({
-                    server,
-                    db,
-                    key,
-                    field,
-                    newField,
-                    value,
-                    decode,
-                    format,
-                    retDecode,
-                    retFormat,
-                })
-                if (success) {
-                    /**
-                     * @type {{updated: HashEntryItem[], removed: HashEntryItem[], updated: HashEntryItem[], replaced: HashReplaceItem[]}}
-                     */
-                    const { updated = [], removed = [], added = [], replaced = [] } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(removed)) {
-                        const removedKeys = map(removed, 'k')
-                        tab.removeValueEntries({ server, db, key, type: 'hash', entries: removedKeys })
-                    }
-                    if (!isEmpty(updated)) {
-                        tab.updateValueEntries({ server, db, key, type: 'hash', entries: updated })
-                    }
-                    if (!isEmpty(added)) {
-                        tab.insertValueEntries({ server, db, key, type: 'hash', entries: added })
-                    }
-                    if (!isEmpty(replaced)) {
-                        tab.replaceValueEntries({
-                            server,
-                            db,
-                            key,
-                            type: 'hash',
-                            entries: replaced,
-                            index: [index],
-                        })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success, updated }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async setHash(args) {
+            return this._mutateValue(args, valueMutations.setHash)
         },
 
         /**
@@ -985,31 +919,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean, [updated]: [], [added]: []}>}
          */
-        async addHashField({ server, db, key, action, fieldItems, reload }) {
-            try {
-                const { data, success, msg } = await AddHashField(server, db, key, action, fieldItems)
-                if (success) {
-                    const { updated = [], added = [] } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(updated)) {
-                        tab.updateValueEntries({ server, db, key, type: 'hash', entries: updated })
-                    }
-                    if (!isEmpty(added)) {
-                        tab.insertValueEntries({ server, db, key, type: 'hash', entries: added })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success, updated, added }
-                } else {
-                    return { success: false, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async addHashField(args) {
+            return this._mutateValue(args, valueMutations.addHashField)
         },
 
         /**
@@ -1046,28 +957,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} reload
          * @returns {Promise<{[msg]: {}, success: boolean, [removed]: string[]}>}
          */
-        async removeHashField({ server, db, key, field, reload }) {
-            try {
-                const { data, success, msg } = await SetHashValue({ server, db, key, field, newField: '' })
-                if (success) {
-                    const { removed = [] } = data
-                    // if (!isEmpty(removed)) {
-                    //     const tab = useTabStore()
-                    //     tab.removeValueEntries({ server, db, key, type: 'hash', entries: removed })
-                    // }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success, removed }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async removeHashField(args) {
+            return this._mutateValue(args, valueMutations.removeHashField)
         },
 
         /**
@@ -1079,35 +970,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} reload
          * @returns {Promise<{[msg]: string, success: boolean, [item]: []}>}
          */
-        async prependListItem({ server, db, key, values, reload }) {
-            try {
-                const { data, success, msg } = await AddListItem(server, db, key, 0, values)
-                if (success) {
-                    const { left = [] } = data
-                    if (!isEmpty(left)) {
-                        const tab = useTabStore()
-                        tab.insertValueEntries({
-                            server: server,
-                            db,
-                            key,
-                            type: 'list',
-                            entries: left,
-                            prepend: true,
-                        })
-                        if (reload === true) {
-                            this.reloadKey({ server, db, key })
-                        } else {
-                            // reload summary only
-                            this.loadKeySummary({ server, db, key })
-                        }
-                    }
-                    return { success, item: left }
-                } else {
-                    return { success: false, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async prependListItem(args) {
+            return this._mutateValue(args, valueMutations.prependListItem)
         },
 
         /**
@@ -1119,36 +983,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean, [item]: any[]}>}
          */
-        async appendListItem({ server, db, key, values, reload }) {
-            try {
-                const { data, success, msg } = await AddListItem(server, db, key, 1, values)
-                if (success) {
-                    const { right = [] } = data
-                    // FIXME: do not append items if not all items loaded
-                    if (!isEmpty(right)) {
-                        const tab = useTabStore()
-                        tab.insertValueEntries({
-                            server: server,
-                            db,
-                            key,
-                            type: 'list',
-                            entries: right,
-                            prepend: false,
-                        })
-                        if (reload === true) {
-                            this.reloadKey({ server, db, key })
-                        } else {
-                            // reload summary only
-                            this.loadKeySummary({ server, db, key })
-                        }
-                    }
-                    return { success, item: right }
-                } else {
-                    return { success: false, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async appendListItem(args) {
+            return this._mutateValue(args, valueMutations.appendListItem)
         },
 
         /**
@@ -1165,66 +1001,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async updateListItem({
-            server,
-            db,
-            key,
-            index,
-            value,
-            decode = decodeTypes.NONE,
-            format = formatTypes.RAW,
-            retDecode,
-            retFormat,
-            reload,
-        }) {
-            try {
-                const { data, success, msg } = await SetListItem({
-                    server,
-                    db,
-                    key,
-                    index,
-                    value,
-                    decode,
-                    format,
-                    retDecode,
-                    retFormat,
-                })
-                if (success) {
-                    /** @type {{replaced: ListReplaceItem[]}} **/
-                    const { replaced = [], removed = [] } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(replaced)) {
-                        tab.replaceValueEntries({
-                            server,
-                            db,
-                            key,
-                            type: 'list',
-                            entries: replaced,
-                        })
-                    }
-                    if (!isEmpty(removed)) {
-                        const removedIndex = map(removed, 'index')
-                        tab.removeValueEntries({
-                            server,
-                            db,
-                            key,
-                            type: 'list',
-                            entries: removedIndex,
-                        })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async updateListItem(args) {
+            return this._mutateValue(args, valueMutations.updateListItem)
         },
 
         /**
@@ -1236,35 +1014,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean, [removed]: string[]}>}
          */
-        async removeListItem({ server, db, key, index, reload }) {
-            try {
-                const { data, success, msg } = await SetListItem({ server, db, key, index })
-                if (success) {
-                    const { removed = [] } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(removed)) {
-                        const removedIndexes = map(removed, 'index')
-                        tab.removeValueEntries({
-                            server,
-                            db,
-                            key,
-                            type: 'list',
-                            entries: removedIndexes,
-                        })
-                        if (reload === true) {
-                            this.reloadKey({ server, db, key })
-                        } else {
-                            // reload summary only
-                            this.loadKeySummary({ server, db, key })
-                        }
-                    }
-                    return { success, removed }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async removeListItem(args) {
+            return this._mutateValue(args, valueMutations.removeListItem)
         },
 
         /**
@@ -1276,31 +1027,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async addSetItem({ server, db, key, value, reload }) {
-            try {
-                if ((!value) instanceof Array) {
-                    value = [value]
-                }
-                const { data, success, msg } = await SetSetItem(server, db, key, false, value)
-                if (success) {
-                    const { added } = data
-                    if (!isEmpty(added)) {
-                        const tab = useTabStore()
-                        tab.insertValueEntries({ server, db, key, type: 'set', entries: added })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async addSetItem(args) {
+            return this._mutateValue(args, valueMutations.addSetItem)
         },
 
         /**
@@ -1317,53 +1045,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async updateSetItem({
-            server,
-            db,
-            key,
-            value,
-            newValue,
-            decode = decodeTypes.NONE,
-            format = formatTypes.RAW,
-            retDecode,
-            retFormat,
-            reload,
-        }) {
-            try {
-                const { data, success, msg } = await UpdateSetItem({
-                    server,
-                    db,
-                    key,
-                    value,
-                    newValue,
-                    decode,
-                    format,
-                    retDecode,
-                    retFormat,
-                })
-                if (success) {
-                    const { added, removed } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(removed)) {
-                        const removedValues = map(removed, 'v')
-                        tab.removeValueEntries({ server, db, key, type: 'set', entries: removedValues })
-                    }
-                    if (!isEmpty(added)) {
-                        tab.insertValueEntries({ server, db, key, type: 'set', entries: added })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success }
-                } else {
-                    return { success: false, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async updateSetItem(args) {
+            return this._mutateValue(args, valueMutations.updateSetItem)
         },
 
         /**
@@ -1375,29 +1058,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async removeSetItem({ server, db, key, value, reload }) {
-            try {
-                const { data, success, msg } = await SetSetItem(server, db, key, true, [value])
-                if (success) {
-                    const { removed } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(removed)) {
-                        const removedValues = map(removed, 'v')
-                        tab.removeValueEntries({ server, db, key, type: 'set', entries: removedValues })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async removeSetItem(args) {
+            return this._mutateValue(args, valueMutations.removeSetItem)
         },
 
         /**
@@ -1410,31 +1072,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async addZSetItem({ server, db, key, action, vs, reload }) {
-            try {
-                const { data, success, msg } = await AddZSetValue(server, db, key, action, vs)
-                if (success) {
-                    const { added, updated } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(added)) {
-                        tab.insertValueEntries({ server, db, key, type: 'zset', entries: added })
-                    }
-                    if (!isEmpty(updated)) {
-                        tab.updateValueEntries({ server, db, key, type: 'zset', entries: updated })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async addZSetItem(args) {
+            return this._mutateValue(args, valueMutations.addZSetItem)
         },
 
         /**
@@ -1453,62 +1092,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async updateZSetItem({
-            server,
-            db,
-            key,
-            value = '',
-            newValue,
-            score,
-            decode = decodeTypes.NONE,
-            format = formatTypes.RAW,
-            retDecode,
-            retFormat,
-            index,
-            reload,
-        }) {
-            try {
-                const { data, success, msg } = await UpdateZSetValue({
-                    server,
-                    db,
-                    key,
-                    value,
-                    newValue,
-                    score,
-                    decode,
-                    format,
-                    retDecode,
-                    retFormat,
-                })
-                if (success) {
-                    const { updated = [], added = [], removed = [], replaced = [] } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(removed)) {
-                        const removedValues = map(removed, 'v')
-                        tab.removeValueEntries({ server, db, key, type: 'zset', entries: removedValues })
-                    }
-                    if (!isEmpty(updated)) {
-                        tab.updateValueEntries({ server, db, key, type: 'zset', entries: updated })
-                    }
-                    if (!isEmpty(added)) {
-                        tab.insertValueEntries({ server, db, key, type: 'zset', entries: added })
-                    }
-                    if (!isEmpty(replaced)) {
-                        tab.replaceValueEntries({ server, db, key, type: 'zset', entries: replaced, index: [index] })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success, updated, removed }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async updateZSetItem(args) {
+            return this._mutateValue(args, valueMutations.updateZSetItem)
         },
 
         /**
@@ -1520,29 +1105,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean, [removed]: []}>}
          */
-        async removeZSetItem({ server, db, key, value, reload }) {
-            try {
-                const { data, success, msg } = await UpdateZSetValue({ server, db, key, value, newValue: '', score: 0 })
-                if (success) {
-                    const { removed } = data
-                    const tab = useTabStore()
-                    if (!isEmpty(removed)) {
-                        const removeValues = map(removed, 'v')
-                        tab.removeValueEntries({ server, db, key, type: 'zset', entries: removeValues })
-                    }
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success, removed }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async removeZSetItem(args) {
+            return this._mutateValue(args, valueMutations.removeZSetItem)
         },
 
         /**
@@ -1555,34 +1119,8 @@ const useBrowserStore = defineStore('browser', {
          * @param {boolean} [reload]
          * @returns {Promise<{[msg]: string, success: boolean}>}
          */
-        async addStreamValue({ server, db, key, id, values, reload }) {
-            try {
-                const { data = {}, success, msg } = await AddStreamValue(server, db, key, id, values)
-                if (success) {
-                    const { added = [] } = data
-                    if (!isEmpty(added)) {
-                        const tab = useTabStore()
-                        tab.insertValueEntries({
-                            server,
-                            db,
-                            key,
-                            type: 'stream',
-                            entries: added,
-                        })
-                        if (reload === true) {
-                            this.reloadKey({ server, db, key })
-                        } else {
-                            // reload summary only
-                            this.loadKeySummary({ server, db, key })
-                        }
-                    }
-                    return { success }
-                } else {
-                    return { success: false, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+        async addStreamValue(args) {
+            return this._mutateValue(args, valueMutations.addStreamValue)
         },
 
         /**
@@ -1595,27 +1133,10 @@ const useBrowserStore = defineStore('browser', {
          * @returns {Promise<{[msg]: {}, success: boolean}>}
          */
         async removeStreamValues({ server, db, key, ids, reload }) {
-            if (typeof ids === 'string') {
-                ids = [ids]
-            }
-            try {
-                const { data = {}, success, msg } = await RemoveStreamValues(server, db, key, ids)
-                if (success) {
-                    const tab = useTabStore()
-                    tab.removeValueEntries({ server, db, key, type: 'stream', entries: ids })
-                    if (reload === true) {
-                        this.reloadKey({ server, db, key })
-                    } else {
-                        // reload summary only
-                        this.loadKeySummary({ server, db, key })
-                    }
-                    return { success }
-                } else {
-                    return { success, msg }
-                }
-            } catch (e) {
-                return { success: false, msg: e.message }
-            }
+            return this._mutateValue(
+                { server, db, key, ids: typeof ids === 'string' ? [ids] : ids, reload },
+                valueMutations.removeStreamValues,
+            )
         },
 
         /**
@@ -1735,23 +1256,24 @@ const useBrowserStore = defineStore('browser', {
         },
 
         /**
-         * delete multiple keys
+         * delete keys job
          * @param {string} server
          * @param {number} db
-         * @param {string[]|number[][]} keys
+         * @param {function(): Promise<*>} run transport call
+         * @param {string|null} cancelEvent event emitted when the job is canceled by user
          * @return {Promise<void>}
+         * @private
          */
-        async deleteKeys(server, db, keys) {
+        async _deleteKeysJob({ server, db, run, cancelEvent }) {
             const msgRef = $message.loading(i18nGlobal.t('dialogue.delete.deleting'), { duration: 0, closable: true })
             let deleted = []
             let failCount = 0
             let canceled = false
-            const serialNo = Date.now().valueOf().toString()
-            msgRef.onClose = () => {
-                EventsEmit('delete:stop:' + serialNo)
+            if (cancelEvent != null) {
+                msgRef.onClose = () => EventsEmit(cancelEvent)
             }
             try {
-                const { success, msg, data } = await DeleteKeys(server, db, keys, serialNo)
+                const { success, msg, data } = await run()
                 if (success) {
                     canceled = get(data, 'canceled', false)
                     deleted = get(data, 'deleted', [])
@@ -1799,6 +1321,23 @@ const useBrowserStore = defineStore('browser', {
         },
 
         /**
+         * delete multiple keys
+         * @param {string} server
+         * @param {number} db
+         * @param {string[]|number[][]} keys
+         * @return {Promise<void>}
+         */
+        async deleteKeys(server, db, keys) {
+            const serialNo = Date.now().valueOf().toString()
+            await this._deleteKeysJob({
+                server,
+                db,
+                run: () => DeleteKeys(server, db, keys, serialNo),
+                cancelEvent: 'delete:stop:' + serialNo,
+            })
+        },
+
+        /**
          * delete multiple keys by pattern
          * @param server
          * @param db
@@ -1806,56 +1345,41 @@ const useBrowserStore = defineStore('browser', {
          * @return {Promise<void>}
          */
         async deleteByPattern(server, db, pattern) {
-            const msgRef = $message.loading(i18nGlobal.t('dialogue.delete.deleting'), { duration: 0, closable: true })
-            let deleted = []
-            let failCount = 0
-            let canceled = false
+            await this._deleteKeysJob({
+                server,
+                db,
+                run: () => DeleteKeysByPattern(server, db, pattern),
+                cancelEvent: null,
+            })
+        },
+
+        /**
+         * run long time job with progress message and cancel event
+         * @param {string} progressEvent progress event name
+         * @param {string} cancelEvent cancel event name
+         * @param {function(Object): string} onProgress build progress message from event payload
+         * @param {function(): Promise<*>} run transport call
+         * @returns {Promise<*>} job result data
+         * @private
+         */
+        async _runJob({ progressEvent, cancelEvent, onProgress, run }) {
+            const msgRef = $message.loading('', { duration: 0, closable: true })
+            const cancelEventFn = EventsOn(progressEvent, (payload) => {
+                msgRef.content = onProgress(payload)
+            })
+            msgRef.onClose = () => {
+                EventsEmit(cancelEvent)
+            }
             try {
-                const { success, msg, data } = await DeleteKeysByPattern(server, db, pattern)
-                if (success) {
-                    canceled = get(data, 'canceled', false)
-                    deleted = get(data, 'deleted', [])
-                    failCount = get(data, 'failed', 0)
-                } else {
+                const { data, success, msg } = await run()
+                if (!success) {
                     $message.error(msg)
                 }
+                return data
             } finally {
+                cancelEventFn()
                 msgRef.destroy()
-                // clear checked keys
-                const tab = useTabStore()
-                tab.setCheckedKeys(server)
             }
-            // refresh model data
-            const deletedCount = size(deleted)
-            if (canceled) {
-                $message.info(i18nGlobal.t('dialogue.handle_cancel'))
-            } else if (failCount <= 0) {
-                // no fail
-                $message.success(i18nGlobal.t('dialogue.delete.completed', { success: deletedCount, fail: failCount }))
-            } else if (failCount >= deletedCount) {
-                // all fail
-                $message.error(i18nGlobal.t('dialogue.delete.completed', { success: deletedCount, fail: failCount }))
-            } else {
-                // some fail
-                $message.warning(i18nGlobal.t('dialogue.delete.completed', { success: deletedCount, fail: failCount }))
-            }
-            // update ui
-            timeout(100).then(async () => {
-                /** @type RedisServerState **/
-                const serverInst = this.servers[server]
-                if (serverInst != null) {
-                    let start = now()
-                    for (let i = 0; i < deleted.length; i++) {
-                        serverInst.removeKeyNode(deleted[i], false)
-                        if (now() - start > 300) {
-                            await timeout(100)
-                            start = now()
-                        }
-                    }
-                    serverInst.tidyNode('', true)
-                    serverInst.updateDBKeyCount(db, -deletedCount)
-                }
-            })
         },
 
         /**
@@ -1868,34 +1392,16 @@ const useBrowserStore = defineStore('browser', {
          * @returns {Promise<void>}
          */
         async exportKeys(server, db, keys, path, expire) {
-            const msgRef = $message.loading('', { duration: 0, closable: true })
-            let exported = 0
-            let failCount = 0
-            let canceled = false
-            const cancelEventFn = EventsOn('exporting:' + path, ({ total, progress, processing }) => {
-                // update export progress
-                msgRef.content = i18nGlobal.t('dialogue.export.exporting', {
-                    // key: decodeRedisKey(processing),
-                    index: progress,
-                    count: total,
-                })
+            const data = await this._runJob({
+                progressEvent: 'exporting:' + path,
+                cancelEvent: 'export:stop:' + path,
+                onProgress: ({ total, progress }) =>
+                    i18nGlobal.t('dialogue.export.exporting', { index: progress, count: total }),
+                run: () => ExportKey(server, db, keys, path, expire),
             })
-            msgRef.onClose = () => {
-                EventsEmit('export:stop:' + path)
-            }
-            try {
-                const { data, success, msg } = await ExportKey(server, db, keys, path, expire)
-                if (success) {
-                    canceled = get(data, 'canceled', false)
-                    exported = get(data, 'exported', 0)
-                    failCount = get(data, 'failed', 0)
-                } else {
-                    $message.error(msg)
-                }
-            } finally {
-                msgRef.destroy()
-                cancelEventFn()
-            }
+            const canceled = get(data, 'canceled', false)
+            const exported = get(data, 'exported', 0)
+            const failCount = get(data, 'failed', 0)
             if (canceled) {
                 $message.info(i18nGlobal.t('dialogue.handle_cancel'))
             } else if (failCount <= 0) {
@@ -1909,10 +1415,7 @@ const useBrowserStore = defineStore('browser', {
             } else {
                 // some fail
                 $message.warning(
-                    i18nGlobal.t('dialogue.export.export_completed', {
-                        success: exported,
-                        fail: failCount,
-                    }),
+                    i18nGlobal.t('dialogue.export.export_completed', { success: exported, fail: failCount }),
                 )
             }
         },
@@ -1928,34 +1431,16 @@ const useBrowserStore = defineStore('browser', {
          * @return {Promise<void>}
          */
         async importKeysFromCSVFile(server, db, path, conflict, ttl, reload) {
-            const msgRef = $message.loading('', { duration: 0, closable: true })
-            let imported = 0
-            let ignored = 0
-            let canceled = false
-            const cancelEventFn = EventsOn('importing:' + path, ({ imported = 0, ignored = 0 }) => {
-                // update export progress
-                msgRef.content = i18nGlobal.t('dialogue.import.importing', {
-                    // key: decodeRedisKey(processing),
-                    imported,
-                    conflict: ignored,
-                })
+            const data = await this._runJob({
+                progressEvent: 'importing:' + path,
+                cancelEvent: 'import:stop:' + path,
+                onProgress: ({ imported = 0, ignored = 0 }) =>
+                    i18nGlobal.t('dialogue.import.importing', { imported, conflict: ignored }),
+                run: () => ImportCSV(server, db, path, conflict, ttl),
             })
-            msgRef.onClose = () => {
-                EventsEmit('import:stop:' + path)
-            }
-            try {
-                const { data, success, msg } = await ImportCSV(server, db, path, conflict, ttl)
-                if (success) {
-                    canceled = get(data, 'canceled', false)
-                    imported = get(data, 'imported', 0)
-                    ignored = get(data, 'ignored', 0)
-                } else {
-                    $message.error(msg)
-                }
-            } finally {
-                cancelEventFn()
-                msgRef.destroy()
-            }
+            const canceled = get(data, 'canceled', false)
+            const imported = get(data, 'imported', 0)
+            const ignored = get(data, 'ignored', 0)
             if (canceled) {
                 $message.info(i18nGlobal.t('dialogue.handle_cancel'))
             } else {
@@ -2137,5 +1622,244 @@ const useBrowserStore = defineStore('browser', {
         },
     },
 })
+/**
+ * per type strategy of value mutation
+ * `call` performs the transport request, `apply` syncs the tab store and returns the extra result fields,
+ * `reloadOnlyWhenApplied` defers reloading until the entries were actually applied
+ * @type {Object.<string, {call: function(Object): Promise<*>, apply: function(Object, Object, Object): Object, [reloadOnlyWhenApplied]: boolean}>}
+ */
+const valueMutations = {
+    setHash: {
+        call: ({
+            server,
+            db,
+            key,
+            field,
+            newField = '',
+            value = '',
+            decode = decodeTypes.NONE,
+            format = formatTypes.RAW,
+            retDecode,
+            retFormat,
+        }) => SetHashValue({ server, db, key, field, newField, value, decode, format, retDecode, retFormat }),
+        apply(tab, { server, db, key, index }, data) {
+            /**
+             * @type {{updated: HashEntryItem[], removed: HashEntryItem[], added: HashEntryItem[], replaced: HashReplaceItem[]}}
+             */
+            const { updated = [], removed = [], added = [], replaced = [] } = data
+            if (!isEmpty(removed)) {
+                const removedKeys = map(removed, 'k')
+                tab.removeValueEntries({ server, db, key, type: 'hash', entries: removedKeys })
+            }
+            if (!isEmpty(updated)) {
+                tab.updateValueEntries({ server, db, key, type: 'hash', entries: updated })
+            }
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'hash', entries: added })
+            }
+            if (!isEmpty(replaced)) {
+                tab.replaceValueEntries({ server, db, key, type: 'hash', entries: replaced, index: [index] })
+            }
+            return { updated }
+        },
+    },
+    addHashField: {
+        call: ({ server, db, key, action, fieldItems }) => AddHashField(server, db, key, action, fieldItems),
+        apply(tab, { server, db, key }, data) {
+            const { updated = [], added = [] } = data
+            if (!isEmpty(updated)) {
+                tab.updateValueEntries({ server, db, key, type: 'hash', entries: updated })
+            }
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'hash', entries: added })
+            }
+            return { updated, added }
+        },
+    },
+    removeHashField: {
+        call: ({ server, db, key, field }) => SetHashValue({ server, db, key, field, newField: '' }),
+        apply(tab, args, data) {
+            const { removed = [] } = data
+            return { removed }
+        },
+    },
+    prependListItem: {
+        call: ({ server, db, key, values }) => AddListItem(server, db, key, 0, values),
+        apply(tab, { server, db, key }, data) {
+            const { left = [] } = data
+            if (!isEmpty(left)) {
+                tab.insertValueEntries({ server, db, key, type: 'list', entries: left, prepend: true })
+            }
+            return { item: left, applied: !isEmpty(left) }
+        },
+        reloadOnlyWhenApplied: true,
+    },
+    appendListItem: {
+        call: ({ server, db, key, values }) => AddListItem(server, db, key, 1, values),
+        apply(tab, { server, db, key }, data) {
+            const { right = [] } = data
+            // FIXME: do not append items if not all items loaded
+            if (!isEmpty(right)) {
+                tab.insertValueEntries({ server, db, key, type: 'list', entries: right, prepend: false })
+            }
+            return { item: right, applied: !isEmpty(right) }
+        },
+        reloadOnlyWhenApplied: true,
+    },
+    updateListItem: {
+        call: ({
+            server,
+            db,
+            key,
+            index,
+            value,
+            decode = decodeTypes.NONE,
+            format = formatTypes.RAW,
+            retDecode,
+            retFormat,
+        }) => SetListItem({ server, db, key, index, value, decode, format, retDecode, retFormat }),
+        apply(tab, { server, db, key }, data) {
+            /** @type {{replaced: ListReplaceItem[]}} **/
+            const { replaced = [], removed = [] } = data
+            if (!isEmpty(replaced)) {
+                tab.replaceValueEntries({ server, db, key, type: 'list', entries: replaced })
+            }
+            if (!isEmpty(removed)) {
+                const removedIndex = map(removed, 'index')
+                tab.removeValueEntries({ server, db, key, type: 'list', entries: removedIndex })
+            }
+            return {}
+        },
+    },
+    removeListItem: {
+        call: ({ server, db, key, index }) => SetListItem({ server, db, key, index }),
+        apply(tab, { server, db, key }, data) {
+            const { removed = [] } = data
+            if (!isEmpty(removed)) {
+                const removedIndexes = map(removed, 'index')
+                tab.removeValueEntries({ server, db, key, type: 'list', entries: removedIndexes })
+            }
+            return { removed, applied: !isEmpty(removed) }
+        },
+        reloadOnlyWhenApplied: true,
+    },
+    addSetItem: {
+        call: ({ server, db, key, value }) => SetSetItem(server, db, key, false, value),
+        apply(tab, { server, db, key }, data) {
+            const { added } = data
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'set', entries: added })
+            }
+            return {}
+        },
+    },
+    updateSetItem: {
+        call: ({
+            server,
+            db,
+            key,
+            value,
+            newValue,
+            decode = decodeTypes.NONE,
+            format = formatTypes.RAW,
+            retDecode,
+            retFormat,
+        }) => UpdateSetItem({ server, db, key, value, newValue, decode, format, retDecode, retFormat }),
+        apply(tab, { server, db, key }, data) {
+            const { added, removed } = data
+            if (!isEmpty(removed)) {
+                const removedValues = map(removed, 'v')
+                tab.removeValueEntries({ server, db, key, type: 'set', entries: removedValues })
+            }
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'set', entries: added })
+            }
+            return {}
+        },
+    },
+    removeSetItem: {
+        call: ({ server, db, key, value }) => SetSetItem(server, db, key, true, [value]),
+        apply(tab, { server, db, key }, data) {
+            const { removed } = data
+            if (!isEmpty(removed)) {
+                const removedValues = map(removed, 'v')
+                tab.removeValueEntries({ server, db, key, type: 'set', entries: removedValues })
+            }
+            return {}
+        },
+    },
+    addZSetItem: {
+        call: ({ server, db, key, action, vs }) => AddZSetValue(server, db, key, action, vs),
+        apply(tab, { server, db, key }, data) {
+            const { added, updated } = data
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'zset', entries: added })
+            }
+            if (!isEmpty(updated)) {
+                tab.updateValueEntries({ server, db, key, type: 'zset', entries: updated })
+            }
+            return {}
+        },
+    },
+    updateZSetItem: {
+        call: ({
+            server,
+            db,
+            key,
+            value = '',
+            newValue,
+            score,
+            decode = decodeTypes.NONE,
+            format = formatTypes.RAW,
+            retDecode,
+            retFormat,
+        }) => UpdateZSetValue({ server, db, key, value, newValue, score, decode, format, retDecode, retFormat }),
+        apply(tab, { server, db, key, index }, data) {
+            const { updated = [], added = [], removed = [], replaced = [] } = data
+            if (!isEmpty(removed)) {
+                const removedValues = map(removed, 'v')
+                tab.removeValueEntries({ server, db, key, type: 'zset', entries: removedValues })
+            }
+            if (!isEmpty(updated)) {
+                tab.updateValueEntries({ server, db, key, type: 'zset', entries: updated })
+            }
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'zset', entries: added })
+            }
+            if (!isEmpty(replaced)) {
+                tab.replaceValueEntries({ server, db, key, type: 'zset', entries: replaced, index: [index] })
+            }
+            return { updated, removed }
+        },
+    },
+    removeZSetItem: {
+        call: ({ server, db, key, value }) => UpdateZSetValue({ server, db, key, value, newValue: '', score: 0 }),
+        apply(tab, { server, db, key }, data) {
+            const { removed } = data
+            if (!isEmpty(removed)) {
+                const removeValues = map(removed, 'v')
+                tab.removeValueEntries({ server, db, key, type: 'zset', entries: removeValues })
+            }
+            return { removed }
+        },
+    },
+    addStreamValue: {
+        call: ({ server, db, key, id, values }) => AddStreamValue(server, db, key, id, values),
+        apply(tab, { server, db, key }, data) {
+            const { added = [] } = data || {}
+            if (!isEmpty(added)) {
+                tab.insertValueEntries({ server, db, key, type: 'stream', entries: added })
+            }
+            return {}
+        },
+    },
+    removeStreamValues: {
+        call: ({ server, db, key, ids }) => RemoveStreamValues(server, db, key, ids),
+        apply(tab, { server, db, key, ids }) {
+            tab.removeValueEntries({ server, db, key, type: 'stream', entries: ids })
+            return {}
+        },
+    },
+}
 
 export default useBrowserStore

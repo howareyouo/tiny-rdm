@@ -128,7 +128,7 @@ func csrfProtection() gin.HandlerFunc {
 		if origin != "" {
 			if !isSameOrigin(c, origin) {
 				log.Printf("[csrf] blocked origin=%s host=%s", origin, getRequestHost(c))
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "msg": "cross-origin request blocked"})
+				fail(c, http.StatusForbidden, "cross-origin request blocked")
 				return
 			}
 			c.Next()
@@ -145,7 +145,7 @@ func csrfProtection() gin.HandlerFunc {
 			requestHost := stripPort(getRequestHost(c))
 			if stripPort(refererHost) != requestHost {
 				log.Printf("[csrf] blocked referer=%s host=%s", referer, getRequestHost(c))
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "msg": "cross-origin request blocked"})
+				fail(c, http.StatusForbidden, "cross-origin request blocked")
 				return
 			}
 		}
@@ -166,12 +166,7 @@ func wsAuthCheck() gin.HandlerFunc {
 			}
 		}
 
-		if !IsAuthEnabled() {
-			c.Next()
-			return
-		}
-		token, err := c.Cookie("rdm_token")
-		if err != nil || !validateToken(token, getClientIP(c)) {
+		if !isAuthenticated(c) {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}

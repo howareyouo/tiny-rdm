@@ -8,10 +8,6 @@ import (
 
 type BinaryConvert struct{}
 
-func (BinaryConvert) Enable() bool {
-	return true
-}
-
 func (BinaryConvert) Encode(str string) (string, bool) {
 	total := len(str)
 	if total%8 != 0 {

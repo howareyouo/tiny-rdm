@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"tinyrdm/backend/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -81,7 +82,7 @@ func (h *WSHub) HandleWebSocket(c *gin.Context) {
 	clientCount := len(h.clients)
 	h.mutex.RUnlock()
 	if clientCount >= wsMaxClients {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"msg": "too many connections"})
+		c.JSON(http.StatusServiceUnavailable, types.JSResp{Msg: "too many connections"})
 		return
 	}
 

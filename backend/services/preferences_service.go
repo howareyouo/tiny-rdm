@@ -11,7 +11,6 @@ import (
 	"tinyrdm/backend/consts"
 	storage2 "tinyrdm/backend/storage"
 	"tinyrdm/backend/types"
-	"tinyrdm/backend/utils/coll"
 	convutil "tinyrdm/backend/utils/convert"
 	sliceutil "tinyrdm/backend/utils/slice"
 
@@ -82,14 +81,17 @@ type FontItem struct {
 
 func (p *preferencesService) GetFontList() (resp types.JSResp) {
 	finder := sysfont.NewFinder(nil)
-	fontSet := coll.NewSet[string]()
+	fontSet := map[string]struct{}{}
 	var fontList []FontItem
 	for _, font := range finder.List() {
-		if len(font.Family) > 0 && !strings.HasPrefix(font.Family, ".") && fontSet.Add(font.Family) {
-			fontList = append(fontList, FontItem{
-				Name: font.Family,
-				Path: font.Filename,
-			})
+		if len(font.Family) > 0 && !strings.HasPrefix(font.Family, ".") {
+			if _, added := fontSet[font.Family]; !added {
+				fontSet[font.Family] = struct{}{}
+				fontList = append(fontList, FontItem{
+					Name: font.Family,
+					Path: font.Filename,
+				})
+			}
 		}
 	}
 	sort.Slice(fontList, func(i, j int) bool {
@@ -103,14 +105,8 @@ func (p *preferencesService) GetFontList() (resp types.JSResp) {
 }
 
 func (p *preferencesService) GetBuildInDecoder() (resp types.JSResp) {
-	buildinDecoder := make([]string, 0, len(convutil.BuildInDecoders))
-	for name, convert := range convutil.BuildInDecoders {
-		if convert.Enable() {
-			buildinDecoder = append(buildinDecoder, name)
-		}
-	}
 	resp.Data = map[string]any{
-		"decoder": buildinDecoder,
+		"decoder": convutil.AvailableDecoders(),
 	}
 	resp.Success = true
 	return

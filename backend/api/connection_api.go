@@ -29,8 +29,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 			Name   string                 `json:"name"`
 			Param  types.ConnectionConfig `json:"param"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().SaveConnection(req.Name, req.Param))
@@ -40,8 +39,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 		var req struct {
 			Conns []types.Connection `json:"conns"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().SaveSortedConnection(req.Conns))
@@ -49,8 +47,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 
 	g.POST("/test", func(c *gin.Context) {
 		var param types.ConnectionConfig
-		if err := c.ShouldBindJSON(&param); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &param) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().TestConnection(param))
@@ -65,8 +62,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 		var req struct {
 			Name string `json:"name"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().CreateGroup(req.Name))
@@ -77,8 +73,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 			Name    string `json:"name"`
 			NewName string `json:"newName"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().RenameGroup(req.Name, req.NewName))
@@ -95,8 +90,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 			Name string `json:"name"`
 			DB   int    `json:"db"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().SaveLastDB(req.Name, req.DB))
@@ -107,8 +101,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 			Name     string `json:"name"`
 			Interval int    `json:"interval"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().SaveRefreshInterval(req.Name, req.Interval))
@@ -161,8 +154,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 
 	g.POST("/list-sentinel-masters", func(c *gin.Context) {
 		var param types.ConnectionConfig
-		if err := c.ShouldBindJSON(&param); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &param) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().ListSentinelMasters(param))
@@ -172,8 +164,7 @@ func registerConnectionRoutes(rg *gin.RouterGroup) {
 		var req struct {
 			URL string `json:"url"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Connection().ParseConnectURL(req.URL))

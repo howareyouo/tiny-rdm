@@ -8,10 +8,6 @@ import (
 
 type MsgpackConvert struct{}
 
-func (MsgpackConvert) Enable() bool {
-	return true
-}
-
 func (c MsgpackConvert) Encode(str string) (string, bool) {
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(str), &obj); err == nil {
@@ -23,7 +19,7 @@ func (c MsgpackConvert) Encode(str string) (string, bool) {
 		}
 	}
 
-	if b, err := msgpack.Marshal(str); err != nil {
+	if b, err := msgpack.Marshal(str); err == nil {
 		return string(b), true
 	}
 

@@ -12,10 +12,6 @@ import (
 
 type UnicodeJsonConvert struct{}
 
-func (UnicodeJsonConvert) Enable() bool {
-	return true
-}
-
 func (UnicodeJsonConvert) Decode(str string) (string, bool) {
 	trimedStr := strings.TrimSpace(str)
 	if (strings.HasPrefix(trimedStr, "{") && strings.HasSuffix(trimedStr, "}")) ||

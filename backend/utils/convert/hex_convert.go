@@ -7,10 +7,6 @@ import (
 
 type HexConvert struct{}
 
-func (HexConvert) Enable() bool {
-	return true
-}
-
 func (HexConvert) Encode(str string) (string, bool) {
 	hexStrArr := strings.Split(str, "\\x")
 	hexStr := strings.Join(hexStrArr, "")

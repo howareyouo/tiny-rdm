@@ -3,7 +3,6 @@ package services
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -17,15 +16,14 @@ import (
 type monitorItem struct {
 	client    *redis.Client
 	cmd       *redis.MonitorCmd
-	mutex     sync.Mutex
 	ch        chan string
-	closeCh   chan struct{}
-	eventName string
+	stream    *serverStream
 }
 
 type monitorService struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+	session   *redisSession
 	mutex     sync.Mutex
 	items     map[string]*monitorItem
 }
@@ -37,101 +35,73 @@ func Monitor() *monitorService {
 	if monitor == nil {
 		onceMonitor.Do(func() {
 			monitor = &monitorService{
-				items: map[string]*monitorItem{},
+				session: newRedisSession(nil),
+				items:   map[string]*monitorItem{},
 			}
 		})
 	}
 	return monitor
 }
 
-func (c *monitorService) getItem(server string) (*monitorItem, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	item, ok := c.items[server]
-	if !ok {
-		var err error
-		conf := Connection().getConnection(server)
-		if conf == nil {
-			return nil, fmt.Errorf("no connection profile named: %s", server)
-		}
-		var uniClient redis.UniversalClient
-		if uniClient, err = Connection().createRedisClient(conf.ConnectionConfig); err != nil {
-			return nil, err
-		}
-		var client *redis.Client
-		if client, ok = uniClient.(*redis.Client); !ok {
-			return nil, errors.New("create redis client fail")
-		}
-		item = &monitorItem{
-			client: client,
-		}
-		c.items[server] = item
-	}
-	return item, nil
-}
-
 func (c *monitorService) Start(ctx context.Context) {
 	c.ctx, c.ctxCancel = context.WithCancel(ctx)
+	c.session.Start(ctx)
 }
 
 // StartMonitor start a monitor by server name
 func (c *monitorService) StartMonitor(server string) (resp types.JSResp) {
-	item, err := c.getItem(server)
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// stop the previous monitor if it is still running
+	if item, ok := c.items[server]; ok && item.stream != nil {
+		item.stream.stop(func() {
+			item.client.Close()
+			item.cmd.Stop()
+		})
+		c.session.close(server)
+		delete(c.items, server)
+	}
+
+	sess, err := c.session.get(server, -1)
 	if err != nil {
 		resp.Msg = err.Error()
 		return
 	}
+	client, ok := sess.client.(*redis.Client)
+	if !ok {
+		resp.Msg = "create redis client fail"
+		return
+	}
 
-	item.ch = make(chan string)
-	item.closeCh = make(chan struct{})
-	item.eventName = "monitor:" + strconv.Itoa(int(time.Now().Unix()))
-	item.cmd = item.client.Monitor(c.ctx, item.ch)
+	item := &monitorItem{
+		client: client,
+		ch:     make(chan string),
+	}
+	item.stream = newServerStream(c.ctx, "monitor:"+strconv.FormatInt(time.Now().UnixNano(), 10), 300, 1*time.Second)
+	item.cmd = client.Monitor(c.ctx, item.ch)
 	item.cmd.Start()
+	c.items[server] = item
 
-	go c.processMonitor(&item.mutex, item.ch, item.closeCh, item.cmd, item.eventName)
+	go c.processMonitor(item.stream, item.ch)
 	resp.Success = true
 	resp.Data = struct {
 		EventName string `json:"eventName"`
 	}{
-		EventName: item.eventName,
+		EventName: item.stream.eventName,
 	}
 	return
 }
 
-func (c *monitorService) processMonitor(mutex *sync.Mutex, ch <-chan string, closeCh <-chan struct{}, cmd *redis.MonitorCmd, eventName string) {
-	cache := make([]string, 0, 1000)
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
+func (c *monitorService) processMonitor(stream *serverStream, ch <-chan string) {
 	for {
 		select {
 		case data := <-ch:
 			if data != "OK" {
-				go func() {
-					mutex.Lock()
-					defer mutex.Unlock()
-					cache = append(cache, data)
-					if len(cache) > 300 {
-						EventsEmit(c.ctx, eventName, cache)
-						cache = cache[:0:cap(cache)]
-					}
-				}()
+				stream.push(data)
 			}
-
-		case <-ticker.C:
-			func() {
-				mutex.Lock()
-				defer mutex.Unlock()
-				if len(cache) > 0 {
-					EventsEmit(c.ctx, eventName, cache)
-					cache = cache[:0:cap(cache)]
-				}
-			}()
-
-		case <-closeCh:
+		case <-stream.closeCh:
 			// monitor stopped
-			cmd.Stop()
 			return
 		}
 	}
@@ -143,14 +113,16 @@ func (c *monitorService) StopMonitor(server string) (resp types.JSResp) {
 	defer c.mutex.Unlock()
 
 	item, ok := c.items[server]
-	if !ok || item.cmd == nil {
+	if !ok || item.stream == nil {
 		resp.Success = true
 		return
 	}
 
-	//close(item.ch)
-	item.client.Close()
-	close(item.closeCh)
+	item.stream.stop(func() {
+		item.client.Close()
+		item.cmd.Stop()
+	})
+	c.session.close(server)
 	delete(c.items, server)
 	resp.Success = true
 	return

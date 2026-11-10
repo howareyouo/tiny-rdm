@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -9,19 +10,16 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"tinyrdm/backend/consts"
 	. "tinyrdm/backend/storage"
 	"tinyrdm/backend/types"
 	_ "tinyrdm/backend/utils/proxy"
 
 	"github.com/klauspost/compress/zip"
 	"github.com/redis/go-redis/v9"
-	"github.com/vrischmann/userdir"
 	sshagent "github.com/xanzy/ssh-agent"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
@@ -507,9 +505,73 @@ func (c *connectionService) SaveRefreshInterval(name string, interval int) (resp
 	return
 }
 
+// connectionsArchiveName returns the file name of an exported connections archive
+func connectionsArchiveName() string {
+	return "connections_" + time.Now().Format("20060102150405") + ".zip"
+}
+
+// exportConnectionsArchive zips the connections profile saved on disk
+func (c *connectionService) exportConnectionsArchive() ([]byte, error) {
+	data, err := c.conns.LoadProfile()
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	zipWriter := zip.NewWriter(&buf)
+	headerWriter, err := zipWriter.CreateHeader(&zip.FileHeader{
+		Name:   CONNECTIONS_PROFILE,
+		Method: zip.Deflate,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err = headerWriter.Write(data); err != nil {
+		return nil, err
+	}
+	if err = zipWriter.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// importConnectionsArchive replaces the connections profile on disk with the one in the archive
+func (c *connectionService) importConnectionsArchive(data []byte) error {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return errors.New("invalid zip file")
+	}
+
+	var profile *zip.File
+	for _, file := range reader.File {
+		if file.Name == CONNECTIONS_PROFILE {
+			profile = file
+			break
+		}
+	}
+	if profile == nil {
+		return errors.New(CONNECTIONS_PROFILE + " not found in zip")
+	}
+
+	zippedFile, err := profile.Open()
+	if err != nil {
+		return errors.New("failed to read zip content")
+	}
+	defer zippedFile.Close()
+
+	content, err := io.ReadAll(zippedFile)
+	if err != nil {
+		return errors.New("failed to read zip content")
+	}
+	if err = c.conns.StoreProfile(content); err != nil {
+		return errors.New("failed to save connections")
+	}
+	return nil
+}
+
 // ExportConnections export connections to zip file
 func (c *connectionService) ExportConnections() (resp types.JSResp) {
-	defaultFileName := "connections_" + time.Now().Format("20060102150405") + ".zip"
+	defaultFileName := connectionsArchiveName()
 	filepath, err := SaveFileDialog(c.ctx, SaveDialogOptions{
 		ShowHiddenFiles: true,
 		DefaultFilename: defaultFileName,
@@ -524,35 +586,13 @@ func (c *connectionService) ExportConnections() (resp types.JSResp) {
 		return
 	}
 
-	// compress the connections profile with zip
-	const connectionFilename = "connections.yaml"
-	inputFile, err := os.Open(path.Join(userdir.GetConfigHome(), consts.APP_DATA_FOLDER, connectionFilename))
-	if err != nil {
-		resp.Msg = err.Error()
-		return
-	}
-	defer inputFile.Close()
-
-	outputFile, err := os.Create(filepath)
-	if err != nil {
-		resp.Msg = err.Error()
-		return
-	}
-	defer outputFile.Close()
-
-	zipWriter := zip.NewWriter(outputFile)
-	defer zipWriter.Close()
-
-	headerWriter, err := zipWriter.CreateHeader(&zip.FileHeader{
-		Name:   connectionFilename,
-		Method: zip.Deflate,
-	})
+	data, err := c.exportConnectionsArchive()
 	if err != nil {
 		resp.Msg = err.Error()
 		return
 	}
 
-	if _, err = io.Copy(headerWriter, inputFile); err != nil {
+	if err = os.WriteFile(filepath, data, 0600); err != nil {
 		resp.Msg = err.Error()
 		return
 	}
@@ -581,38 +621,15 @@ func (c *connectionService) ImportConnections() (resp types.JSResp) {
 		return
 	}
 
-	const connectionFilename = "connections.yaml"
-	zipFile, err := zip.OpenReader(filepath)
+	data, err := os.ReadFile(filepath)
 	if err != nil {
 		resp.Msg = err.Error()
 		return
 	}
 
-	var file *zip.File
-	for _, file = range zipFile.File {
-		if file.Name == connectionFilename {
-			break
-		}
-	}
-	if file != nil {
-		zippedFile, err := file.Open()
-		if err != nil {
-			resp.Msg = err.Error()
-			return
-		}
-		defer zippedFile.Close()
-
-		outputFile, err := os.Create(path.Join(userdir.GetConfigHome(), consts.APP_DATA_FOLDER, connectionFilename))
-		if err != nil {
-			resp.Msg = err.Error()
-			return
-		}
-		defer outputFile.Close()
-
-		if _, err = io.Copy(outputFile, zippedFile); err != nil {
-			resp.Msg = err.Error()
-			return
-		}
+	if err = c.importConnectionsArchive(data); err != nil {
+		resp.Msg = err.Error()
+		return
 	}
 
 	resp.Success = true

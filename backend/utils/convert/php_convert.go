@@ -42,7 +42,7 @@ if ($action === 'decode') {
 echo '[RDM-ERROR]';
 `
 
-func NewPhpConvert() *PhpConvert {
+func NewPhpConvert() DataConvert {
 	c := CmdConvert{
 		Name:       "PHP",
 		Auto:       true,
@@ -65,25 +65,4 @@ func NewPhpConvert() *PhpConvert {
 	return &PhpConvert{
 		CmdConvert: c,
 	}
-}
-
-func (p *PhpConvert) Enable() bool {
-	if p == nil {
-		return false
-	}
-	return true
-}
-
-func (p *PhpConvert) Encode(str string) (string, bool) {
-	if !p.Enable() {
-		return str, false
-	}
-	return p.CmdConvert.Encode(str)
-}
-
-func (p *PhpConvert) Decode(str string) (string, bool) {
-	if !p.Enable() {
-		return str, false
-	}
-	return p.CmdConvert.Decode(str)
 }

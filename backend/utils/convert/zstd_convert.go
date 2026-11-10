@@ -10,10 +10,6 @@ import (
 
 type ZStdConvert struct{}
 
-func (ZStdConvert) Enable() bool {
-	return true
-}
-
 func (ZStdConvert) Encode(str string) (string, bool) {
 	var compress = func(b []byte) (string, error) {
 		var buf bytes.Buffer

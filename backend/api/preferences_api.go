@@ -19,8 +19,7 @@ func registerPreferencesRoutes(rg *gin.RouterGroup) {
 
 	g.POST("/set", func(c *gin.Context) {
 		var pf types.Preferences
-		if err := c.ShouldBindJSON(&pf); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &pf) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Preferences().SetPreferences(pf))
@@ -28,8 +27,7 @@ func registerPreferencesRoutes(rg *gin.RouterGroup) {
 
 	g.POST("/update", func(c *gin.Context) {
 		var value map[string]any
-		if err := c.ShouldBindJSON(&value); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &value) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Preferences().UpdatePreferences(value))

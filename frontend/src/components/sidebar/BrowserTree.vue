@@ -1,32 +1,27 @@
 <script setup>
-import { computed, h, markRaw, nextTick, reactive, ref, watchEffect } from 'vue'
+import { computed, h, nextTick, ref, watchEffect } from 'vue'
 import { ConnectionType } from '@/consts/connection_type.js'
-import { NIcon, NSpace, NText, useThemeVars } from 'naive-ui'
+import { NIcon, NText } from 'naive-ui'
 import Key from '@/components/icons/Key.vue'
 import Binary from '@/components/icons/Binary.vue'
 import Database from '@/components/icons/Database.vue'
+import Layer from '@/components/icons/Layer.vue'
 import { filter, find, first, get, includes, isEmpty, last, map, size, toUpper } from 'lodash'
 import { useI18n } from 'vue-i18n'
-import Refresh from '@/components/icons/Refresh.vue'
-import CopyLink from '@/components/icons/CopyLink.vue'
-import Add from '@/components/icons/Add.vue'
-import Layer from '@/components/icons/Layer.vue'
-import Delete from '@/components/icons/Delete.vue'
+import RedisTypeTag from '@/components/common/RedisTypeTag.vue'
 import useDialogStore from 'stores/dialog.js'
 import useConnectionStore from 'stores/connections.js'
 import useTabStore from 'stores/tab.js'
-import IconButton from '@/components/common/IconButton.vue'
 import { parseHexColor } from '@/utils/rgb.js'
-import LoadList from '@/components/icons/LoadList.vue'
-import LoadAll from '@/components/icons/LoadAll.vue'
 import useBrowserStore from 'stores/browser.js'
 import { useRender } from '@/utils/render.js'
-import RedisTypeTag from '@/components/common/RedisTypeTag.vue'
 import usePreferencesStore from 'stores/preferences.js'
 import { typesIconStyle } from '@/consts/support_redis_type.js'
 import { nativeRedisKey } from '@/utils/key_convert.js'
 import { ClipboardSetText } from 'wailsjs/runtime/runtime.js'
 import { isMacOS } from '@/utils/platform.js'
+import { divider, useTreeShell } from '@/components/sidebar/tree_shell.js'
+import { browserCommands } from '@/components/sidebar/commands.js'
 
 const props = defineProps({
     server: String,
@@ -38,7 +33,6 @@ const props = defineProps({
     checkMode: Boolean,
 })
 
-const themeVars = useThemeVars()
 const render = useRender()
 const i18n = useI18n()
 const connectionStore = useConnectionStore()
@@ -97,62 +91,58 @@ const backgroundColor = computed(() => {
     return `rgba(${r}, ${g}, ${b}, 0.2)`
 })
 
-const contextMenuParam = reactive({
-    show: false,
-    x: 0,
-    y: 0,
-    options: null,
-})
+const commands = browserCommands()
 
-const menuOptions = {
-    [ConnectionType.RedisKey]: [
-        // {
-        //     key: 'key_reload',
-        //     label: 'interface.reload'),
-        //     icon: Refresh,
-        // },
-        {
-            key: 'key_newkey',
-            label: 'interface.new_key',
-            icon: Add,
-        },
-        {
-            key: 'key_copy',
-            label: 'interface.copy_path',
-            icon: CopyLink,
-        },
-        {
-            type: 'divider',
-            key: 'd1',
-        },
-        {
-            key: 'key_remove',
-            label: 'interface.batch_delete_key',
-            icon: Delete,
-        },
-    ],
-    [ConnectionType.RedisValue]: [
-        {
-            key: 'value_reload',
-            label: 'interface.reload',
-            icon: Refresh,
-        },
-        {
-            key: 'value_copy',
-            label: 'interface.copy_key',
-            icon: CopyLink,
-        },
-        {
-            type: 'divider',
-            key: 'd1',
-        },
-        {
-            key: 'value_remove',
-            label: 'interface.remove_key',
-            icon: Delete,
-        },
-    ],
+const menu = {
+    [ConnectionType.RedisKey]: ['key_newkey', 'key_copy', divider('d1'), 'key_remove'],
+    [ConnectionType.RedisValue]: ['value_reload', 'value_copy', divider('d1'), 'value_remove'],
 }
+
+const buttons = {
+    [ConnectionType.RedisDB]: (option) =>
+        option.opened === true
+            ? [
+                  { key: 'db_loadmore', disabled: option.end === true, loading: option.loading === true },
+                  { key: 'db_loadall', disabled: option.end === true, loading: option.loading === true },
+              ]
+            : [],
+    [ConnectionType.RedisKey]: (option) => [
+        {
+            key: 'key_reload',
+            label: props.fullLoaded ? 'interface.reload' : 'interface.reload_disable',
+            disabled: !props.fullLoaded,
+            loading: option.loading === true,
+        },
+        { key: 'key_newkey' },
+        { key: 'key_remove' },
+    ],
+    [ConnectionType.RedisValue]: ['value_remove'],
+}
+
+const {
+    contextMenuParam,
+    handleSelectContextMenu,
+    renderIconMenu,
+    renderSuffix: renderSelectedSuffix,
+    onNodeContextMenu,
+    handleOutsideContextMenu,
+    onSelectedKeysUpdate,
+    onExpandedKeysUpdate,
+} = useTreeShell({
+    commands,
+    menu,
+    buttons,
+    context: () => ({ server: props.server, db: props.db }),
+    resolveNode: (key) => browserStore.getNode(key),
+    selection: {
+        get: () => selectedKeys.value,
+        set: (keys) => onUpdateSelectedKeys(keys),
+    },
+    expansion: {
+        get: () => expandedKeys.value,
+        set: (keys, option, meta) => onUpdateExpanded(keys, option, meta),
+    },
+})
 
 const handleKeyUp = () => {
     const selectedKey = get(selectedKeys.value, 0)
@@ -360,76 +350,6 @@ const onKeyShortcut = (e) => {
     }
 }
 
-const handleSelectContextMenu = (action) => {
-    contextMenuParam.show = false
-    const selectedKey = get(selectedKeys.value, 0)
-    if (selectedKey == null) {
-        return
-    }
-    const node = browserStore.getNode(selectedKey)
-    const { db = 0, key: nodeKey, redisKey: rk = '', redisKeyCode: rkc, label } = node || {}
-    const redisKey = rkc || rk
-    const redisKeyName = !!rkc ? label : redisKey
-    switch (action) {
-        case 'key_newkey':
-            dialogStore.openNewKeyDialog(redisKey, props.server, db)
-            break
-        case 'db_filter':
-            // const { match: pattern, type } = browserStore.getKeyFilter(props.server)
-            // dialogStore.openKeyFilterDialog(props.server, db, pattern, type)
-            break
-        case 'key_reload':
-            if (node != null && !!!node.loading) {
-                node.loading = true
-                browserStore.reloadLayer(props.server, db, redisKey).finally(() => {
-                    delete node.loading
-                })
-            }
-            break
-        case 'value_reload':
-            browserStore.reloadKey({
-                server: props.server,
-                db,
-                key: redisKey,
-            })
-            break
-        case 'key_remove':
-            dialogStore.openDeleteKeyDialog(props.server, db, isEmpty(redisKey) ? '*' : redisKey + ':*')
-            break
-        case 'value_remove':
-            $dialog.warning(i18n.t('dialogue.remove_tip', { name: redisKeyName }), () => {
-                browserStore.deleteKey(props.server, db, redisKey).then((success) => {
-                    if (success) {
-                        $message.success(i18n.t('dialogue.delete.success', { key: redisKeyName }))
-                    }
-                })
-            })
-            break
-        case 'key_copy':
-        case 'value_copy':
-            ClipboardSetText(nativeRedisKey(redisKey))
-            $message.success(i18n.t('interface.copy_succ'))
-            break
-        case 'db_loadall':
-            if (node != null && !!!node.loading) {
-                node.loading = true
-                browserStore
-                    .loadAllKeys(props.server, db)
-                    .catch((e) => {
-                        $message.error(e.message)
-                    })
-                    .finally(() => {
-                        delete node.loading
-                        node.fullLoaded = true
-                    })
-            }
-            break
-        case 'more_action':
-        default:
-            console.warn('TODO: handle context menu:' + action)
-    }
-}
-
 const onUpdateSelectedKeys = (keys, options) => {
     if (!isEmpty(keys)) {
         tabStore.setSelectedKeys(props.server, keys)
@@ -490,15 +410,6 @@ const onUpdateCheckedKeys = (keys, options) => {
 
 const renderPrefix = ({ option }) => {
     switch (option.type) {
-        // case ConnectionType.Server:
-        //     const icon = option.cluster === true ? ToggleCluster : ToggleServer
-        //     return h(
-        //         NIcon,
-        //         { size: 20 },
-        //         {
-        //             default: () => h(icon, { modelValue: false }),
-        //         },
-        //     )
         case ConnectionType.RedisDB:
             return h(
                 NIcon,
@@ -571,104 +482,17 @@ const renderLabel = ({ option }) => {
                 ])
             }
             return `${option.label} (${option.keyCount || 0})`
-        // case ConnectionType.RedisValue:
-        //   return `[${option.keyType}]${option.label}`
     }
     return option.label
-}
-
-// render horizontal item
-const renderIconMenu = (items) => {
-    return h(
-        NSpace,
-        {
-            align: 'center',
-            inline: true,
-            size: 3,
-            wrapItem: false,
-            wrap: false,
-            style: 'margin-right: 5px',
-        },
-        () => items,
-    )
-}
-
-const calcDBMenu = (opened, loading, end) => {
-    const btns = []
-    if (opened) {
-        btns.push(
-            h(IconButton, {
-                tTooltip: 'interface.load_more',
-                icon: LoadList,
-                disabled: end === true,
-                loading: loading === true,
-                color: loading === true ? themeVars.value.primaryColor : '',
-                onClick: () => handleSelectContextMenu('db_loadmore'),
-            }),
-            h(IconButton, {
-                tTooltip: 'interface.load_all',
-                icon: LoadAll,
-                disabled: end === true,
-                loading: loading === true,
-                color: loading === true ? themeVars.value.primaryColor : '',
-                onClick: () => handleSelectContextMenu('db_loadall'),
-            }),
-            // h(IconButton, {
-            //     tTooltip: 'interface.more_action',
-            //     icon: More,
-            //     onClick: () => handleSelectContextMenu('more_action'),
-            // }),
-        )
-    }
-    return btns
-}
-
-const calcLayerMenu = (loading) => {
-    return [
-        // reload layer enable only full loaded
-        h(IconButton, {
-            tTooltip: props.fullLoaded ? 'interface.reload' : 'interface.reload_disable',
-            icon: Refresh,
-            loading: loading === true,
-            disabled: !props.fullLoaded,
-            onClick: () => handleSelectContextMenu('key_reload'),
-        }),
-        h(IconButton, {
-            tTooltip: 'interface.new_key',
-            icon: Add,
-            onClick: () => handleSelectContextMenu('key_newkey'),
-        }),
-        h(IconButton, {
-            tTooltip: 'interface.batch_delete_key',
-            icon: Delete,
-            onClick: () => handleSelectContextMenu('key_remove'),
-        }),
-    ]
-}
-
-const calcValueMenu = () => {
-    return [
-        h(IconButton, {
-            tTooltip: 'interface.remove_key',
-            icon: Delete,
-            onClick: () => handleSelectContextMenu('value_remove'),
-        }),
-    ]
 }
 
 // render menu function icon
 const renderSuffix = ({ option }) => {
     const selected = includes(selectedKeys.value, option.key)
     if (selected && !props.checkMode) {
-        switch (option.type) {
-            case ConnectionType.RedisDB:
-                return renderIconMenu(calcDBMenu(option.opened, option.loading, option.fullLoaded))
-            case ConnectionType.RedisKey:
-                return renderIconMenu(calcLayerMenu(option.loading))
-            case ConnectionType.RedisValue:
-                return renderIconMenu(calcValueMenu())
-        }
-    } else if (!selected && !!option.redisKeyCode && option.type === ConnectionType.RedisValue) {
+        return renderSelectedSuffix({ option })
+    }
+    if (!selected && !!option.redisKeyCode && option.type === ConnectionType.RedisValue) {
         // render binary icon
         return renderIconMenu(h(NIcon, { size: 20 }, () => h(Binary)))
     }
@@ -721,27 +545,9 @@ const nodeProps = ({ option }) => {
             }
         },
         onContextmenu(e) {
-            e.preventDefault()
-            if (!menuOptions.hasOwnProperty(option.type)) {
-                return
-            }
-            contextMenuParam.show = false
-            nextTick().then(() => {
-                contextMenuParam.options = markRaw(menuOptions[option.type] || [])
-                contextMenuParam.x = e.clientX
-                contextMenuParam.y = e.clientY
-                contextMenuParam.show = true
-                onUpdateSelectedKeys([option.key], [option])
-            })
+            onNodeContextMenu(option, e)
         },
-        // onMouseover() {
-        //   console.log('mouse over')
-        // }
     }
-}
-
-const handleOutsideContextMenu = () => {
-    contextMenuParam.show = false
 }
 
 watchEffect(
@@ -830,8 +636,8 @@ defineExpose({
             class="fill-height"
             virtual-scroll
             @keydown="onKeyShortcut"
-            @update:selected-keys="onUpdateSelectedKeys"
-            @update:expanded-keys="onUpdateExpanded"
+            @update:selected-keys="onSelectedKeysUpdate"
+            @update:expanded-keys="onExpandedKeysUpdate"
             @update:checked-keys="onUpdateCheckedKeys">
             <template #empty>
                 <n-empty class="empty-content" />

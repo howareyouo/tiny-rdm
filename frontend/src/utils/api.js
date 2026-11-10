@@ -5,38 +5,26 @@
 
 const API_BASE = '/api'
 
-async function post(path, body = {}) {
-    const resp = await fetch(`${API_BASE}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(body),
-    })
-    if (resp.status === 401) {
-        window.dispatchEvent(new Event('rdm:unauthorized'))
-        return { success: false, msg: 'unauthorized' }
-    }
-    return resp.json()
+function unauthorized() {
+    window.dispatchEvent(new Event('rdm:unauthorized'))
+    return { success: false, msg: 'unauthorized' }
 }
 
-async function get(path, params = {}) {
-    const query = new URLSearchParams(params).toString()
-    const url = query ? `${API_BASE}${path}?${query}` : `${API_BASE}${path}`
-    const resp = await fetch(url, { credentials: 'same-origin' })
-    if (resp.status === 401) {
-        window.dispatchEvent(new Event('rdm:unauthorized'))
-        return { success: false, msg: 'unauthorized' }
+async function call(method, path, payload) {
+    let url = `${API_BASE}${path}`
+    const init = { method, credentials: 'same-origin' }
+    if (method === 'GET' || method === 'DELETE') {
+        const query = payload ? new URLSearchParams(payload).toString() : ''
+        if (query) {
+            url += `?${query}`
+        }
+    } else {
+        init.headers = { 'Content-Type': 'application/json' }
+        init.body = JSON.stringify(payload ?? {})
     }
-    return resp.json()
-}
-
-async function del(path, params = {}) {
-    const query = new URLSearchParams(params).toString()
-    const url = query ? `${API_BASE}${path}?${query}` : `${API_BASE}${path}`
-    const resp = await fetch(url, { method: 'DELETE', credentials: 'same-origin' })
+    const resp = await fetch(url, init)
     if (resp.status === 401) {
-        window.dispatchEvent(new Event('rdm:unauthorized'))
-        return { success: false, msg: 'unauthorized' }
+        return unauthorized()
     }
     return resp.json()
 }
@@ -44,47 +32,47 @@ async function del(path, params = {}) {
 // ==================== Connection Service ====================
 
 export function ListConnection() {
-    return get('/connection/list')
+    return call('GET', '/connection/list')
 }
 
 export function GetConnection(name) {
-    return get('/connection/get', { name })
+    return call('GET', '/connection/get', { name })
 }
 
 export function SaveConnection(name, param) {
-    return post('/connection/save', { name, param })
+    return call('POST', '/connection/save', { name, param })
 }
 
 export function SaveSortedConnection(conns) {
-    return post('/connection/save-sorted', { conns })
+    return call('POST', '/connection/save-sorted', { conns })
 }
 
 export function TestConnection(param) {
-    return post('/connection/test', param)
+    return call('POST', '/connection/test', param)
 }
 
 export function DeleteConnection(name) {
-    return del('/connection/delete', { name })
+    return call('DELETE', '/connection/delete', { name })
 }
 
 export function CreateGroup(name) {
-    return post('/connection/group/create', { name })
+    return call('POST', '/connection/group/create', { name })
 }
 
 export function RenameGroup(name, newName) {
-    return post('/connection/group/rename', { name, newName })
+    return call('POST', '/connection/group/rename', { name, newName })
 }
 
 export function DeleteGroup(name, includeConn) {
-    return del('/connection/group/delete', { name, includeConn })
+    return call('DELETE', '/connection/group/delete', { name, includeConn })
 }
 
 export function SaveLastDB(name, db) {
-    return post('/connection/save-last-db', { name, db })
+    return call('POST', '/connection/save-last-db', { name, db })
 }
 
 export function SaveRefreshInterval(name, interval) {
-    return post('/connection/save-refresh-interval', { name, interval })
+    return call('POST', '/connection/save-refresh-interval', { name, interval })
 }
 
 export async function ExportConnections() {
@@ -94,8 +82,7 @@ export async function ExportConnections() {
             credentials: 'same-origin',
         })
         if (resp.status === 401) {
-            window.dispatchEvent(new Event('rdm:unauthorized'))
-            return { success: false, msg: 'unauthorized' }
+            return unauthorized()
         }
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}))
@@ -133,8 +120,7 @@ export async function ImportConnections() {
                         body: formData,
                     })
                     if (resp.status === 401) {
-                        window.dispatchEvent(new Event('rdm:unauthorized'))
-                        resolve({ success: false, msg: 'unauthorized' })
+                        resolve(unauthorized())
                         return
                     }
                     resolve(await resp.json())
@@ -152,213 +138,213 @@ export async function ImportConnections() {
 }
 
 export function ParseConnectURL(url) {
-    return post('/connection/parse-url', { url })
+    return call('POST', '/connection/parse-url', { url })
 }
 
 export function ListSentinelMasters(param) {
-    return post('/connection/list-sentinel-masters', param)
+    return call('POST', '/connection/list-sentinel-masters', param)
 }
 
 // ==================== Browser Service ====================
 
 export function OpenConnection(name) {
-    return post('/browser/open-connection', { name })
+    return call('POST', '/browser/open-connection', { name })
 }
 
 export function CloseConnection(name) {
-    return post('/browser/close-connection', { name })
+    return call('POST', '/browser/close-connection', { name })
 }
 
 export function OpenDatabase(server, db) {
-    return post('/browser/open-database', { server, db })
+    return call('POST', '/browser/open-database', { server, db })
 }
 
 export function ServerInfo(name) {
-    return post('/browser/server-info', { name })
+    return call('POST', '/browser/server-info', { name })
 }
 
 export function LoadNextKeys(server, db, match, keyType, exactMatch) {
-    return post('/browser/load-next-keys', { server, db, match, keyType, exactMatch })
+    return call('POST', '/browser/load-next-keys', { server, db, match, keyType, exactMatch })
 }
 
 export function LoadNextAllKeys(server, db, match, keyType, exactMatch) {
-    return post('/browser/load-next-all-keys', { server, db, match, keyType, exactMatch })
+    return call('POST', '/browser/load-next-all-keys', { server, db, match, keyType, exactMatch })
 }
 
 export function LoadAllKeys(server, db, match, keyType, exactMatch) {
-    return post('/browser/load-all-keys', { server, db, match, keyType, exactMatch })
+    return call('POST', '/browser/load-all-keys', { server, db, match, keyType, exactMatch })
 }
 
 export function GetKeyType(param) {
-    return post('/browser/get-key-type', param)
+    return call('POST', '/browser/get-key-type', param)
 }
 
 export function GetKeySummary(param) {
-    return post('/browser/get-key-summary', param)
+    return call('POST', '/browser/get-key-summary', param)
 }
 
 export function GetKeyDetail(param) {
-    return post('/browser/get-key-detail', param)
+    return call('POST', '/browser/get-key-detail', param)
 }
 
 export function ConvertValue(value, decode, format) {
-    return post('/browser/convert-value', { value, decode, format })
+    return call('POST', '/browser/convert-value', { value, decode, format })
 }
 
 export function SetKeyValue(param) {
-    return post('/browser/set-key-value', param)
+    return call('POST', '/browser/set-key-value', param)
 }
 
 export function GetHashValue(param) {
-    return post('/browser/get-hash-value', param)
+    return call('POST', '/browser/get-hash-value', param)
 }
 
 export function SetHashValue(param) {
-    return post('/browser/set-hash-value', param)
+    return call('POST', '/browser/set-hash-value', param)
 }
 
 export function AddHashField(server, db, key, action, fieldItems) {
-    return post('/browser/add-hash-field', { server, db, key, action, fieldItems })
+    return call('POST', '/browser/add-hash-field', { server, db, key, action, fieldItems })
 }
 
 export function AddListItem(server, db, key, action, items) {
-    return post('/browser/add-list-item', { server, db, key, action, items })
+    return call('POST', '/browser/add-list-item', { server, db, key, action, items })
 }
 
 export function SetListItem(param) {
-    return post('/browser/set-list-item', param)
+    return call('POST', '/browser/set-list-item', param)
 }
 
 export function SetSetItem(server, db, key, remove, members) {
-    return post('/browser/set-set-item', { server, db, key, remove, members })
+    return call('POST', '/browser/set-set-item', { server, db, key, remove, members })
 }
 
 export function UpdateSetItem(param) {
-    return post('/browser/update-set-item', param)
+    return call('POST', '/browser/update-set-item', param)
 }
 
 export function UpdateZSetValue(param) {
-    return post('/browser/update-zset-value', param)
+    return call('POST', '/browser/update-zset-value', param)
 }
 
 export function AddZSetValue(server, db, key, action, valueScore) {
-    return post('/browser/add-zset-value', { server, db, key, action, valueScore })
+    return call('POST', '/browser/add-zset-value', { server, db, key, action, valueScore })
 }
 
 export function AddStreamValue(server, db, key, id, fieldItems) {
-    return post('/browser/add-stream-value', { server, db, key, id, fieldItems })
+    return call('POST', '/browser/add-stream-value', { server, db, key, id, fieldItems })
 }
 
 export function RemoveStreamValues(server, db, key, ids) {
-    return post('/browser/remove-stream-values', { server, db, key, ids })
+    return call('POST', '/browser/remove-stream-values', { server, db, key, ids })
 }
 
 export function SetKeyTTL(server, db, key, ttl) {
-    return post('/browser/set-key-ttl', { server, db, key, ttl })
+    return call('POST', '/browser/set-key-ttl', { server, db, key, ttl })
 }
 
 export function BatchSetTTL(server, db, keys, ttl, serialNo) {
-    return post('/browser/batch-set-ttl', { server, db, keys, ttl, serialNo })
+    return call('POST', '/browser/batch-set-ttl', { server, db, keys, ttl, serialNo })
 }
 
 export function DeleteKey(server, db, key, async) {
-    return post('/browser/delete-key', { server, db, key, async })
+    return call('POST', '/browser/delete-key', { server, db, key, async })
 }
 
 export function DeleteKeys(server, db, keys, serialNo) {
-    return post('/browser/delete-keys', { server, db, keys, serialNo })
+    return call('POST', '/browser/delete-keys', { server, db, keys, serialNo })
 }
 
 export function DeleteKeysByPattern(server, db, pattern) {
-    return post('/browser/delete-keys-by-pattern', { server, db, pattern })
+    return call('POST', '/browser/delete-keys-by-pattern', { server, db, pattern })
 }
 
 export function RenameKey(server, db, key, newKey) {
-    return post('/browser/rename-key', { server, db, key, newKey })
+    return call('POST', '/browser/rename-key', { server, db, key, newKey })
 }
 
 export function ExportKey(server, db, keys, path, includeExpire) {
-    return post('/browser/export-key', { server, db, keys, path, includeExpire })
+    return call('POST', '/browser/export-key', { server, db, keys, path, includeExpire })
 }
 
 export function ImportCSV(server, db, path, conflict, ttl) {
-    return post('/browser/import-csv', { server, db, path, conflict, ttl })
+    return call('POST', '/browser/import-csv', { server, db, path, conflict, ttl })
 }
 
 export function FlushDB(server, db, async) {
-    return post('/browser/flush-db', { server, db, async })
+    return call('POST', '/browser/flush-db', { server, db, async })
 }
 
-export function GetSlowLogs(server, db, num) {
-    return post('/browser/get-slow-logs', { server, db, num })
+export function GetSlowLogs(server, num) {
+    return call('POST', '/browser/get-slow-logs', { server, num })
 }
 
-export function GetClientList(server, db) {
-    return post('/browser/get-client-list', { server, db })
+export function GetClientList(server) {
+    return call('POST', '/browser/get-client-list', { server })
 }
 
-export function GetCmdHistory() {
-    return post('/browser/get-cmd-history')
+export function GetCmdHistory(pageNo, pageSize) {
+    return call('POST', '/browser/get-cmd-history', { pageNo, pageSize })
 }
 
 export function CleanCmdHistory() {
-    return post('/browser/clean-cmd-history')
+    return call('POST', '/browser/clean-cmd-history')
 }
 
 // ==================== CLI Service ====================
 
 export function StartCli(server, db) {
-    return post('/cli/start', { server, db })
+    return call('POST', '/cli/start', { server, db })
 }
 
 export function CloseCli(server) {
-    return post('/cli/close', { server })
+    return call('POST', '/cli/close', { server })
 }
 
 // ==================== Monitor Service ====================
 
 export function StartMonitor(server) {
-    return post('/monitor/start', { server })
+    return call('POST', '/monitor/start', { server })
 }
 
 export function StopMonitor(server) {
-    return post('/monitor/stop', { server })
+    return call('POST', '/monitor/stop', { server })
 }
 
 export function ExportLog(logs) {
-    return post('/monitor/export-log', { logs })
+    return call('POST', '/monitor/export-log', { logs })
 }
 
 // ==================== Pubsub Service ====================
 
 export function Publish(server, channel, payload) {
-    return post('/pubsub/publish', { server, channel, payload })
+    return call('POST', '/pubsub/publish', { server, channel, payload })
 }
 
 export function StartSubscribe(server) {
-    return post('/pubsub/subscribe', { server })
+    return call('POST', '/pubsub/subscribe', { server })
 }
 
 export function StopSubscribe(server) {
-    return post('/pubsub/unsubscribe', { server })
+    return call('POST', '/pubsub/unsubscribe', { server })
 }
 
 // ==================== Preferences Service ====================
 
 export function GetPreferences() {
-    return get('/preferences/get')
+    return call('GET', '/preferences/get')
 }
 
 export function SetPreferences(pf) {
-    return post('/preferences/set', pf)
+    return call('POST', '/preferences/set', pf)
 }
 
 export function UpdatePreferences(value) {
-    return post('/preferences/update', value)
+    return call('POST', '/preferences/update', value)
 }
 
 export function RestorePreferences() {
-    return post('/preferences/restore')
+    return call('POST', '/preferences/restore')
 }
 
 // Common fonts to probe when Local Font Access API is unavailable
@@ -395,22 +381,22 @@ export async function GetFontList() {
 }
 
 export function GetBuildInDecoder() {
-    return get('/preferences/buildin-decoder')
+    return call('GET', '/preferences/buildin-decoder')
 }
 
 export function GetAppVersion() {
-    return get('/preferences/version')
+    return call('GET', '/preferences/version')
 }
 
 export function CheckForUpdate() {
-    return get('/preferences/check-update')
+    return call('GET', '/preferences/check-update')
 }
 
 // ==================== System Service ====================
 
 // Alias used in App.vue
 export function Info() {
-    return get('/system/info')
+    return call('GET', '/system/info')
 }
 
 // Web replacement for native file dialog
@@ -426,14 +412,13 @@ export async function SelectFile(title, ext) {
                 const formData = new FormData()
                 formData.append('file', input.files[0])
                 try {
-                    const resp = await fetch('/api/system/select-file', {
+                    const resp = await fetch(`${API_BASE}/system/select-file`, {
                         method: 'POST',
                         credentials: 'same-origin',
                         body: formData,
                     })
                     if (resp.status === 401) {
-                        window.dispatchEvent(new Event('rdm:unauthorized'))
-                        resolve({ success: false, msg: 'unauthorized' })
+                        resolve(unauthorized())
                         return
                     }
                     resolve(await resp.json())
@@ -458,9 +443,9 @@ export async function SaveFile(title, defaultName, ext) {
 // ==================== Auth Service ====================
 
 export async function Login(username, password) {
-    return await post('/auth/login', { username, password })
+    return await call('POST', '/auth/login', { username, password })
 }
 
 export async function Logout() {
-    return await post('/auth/logout')
+    return await call('POST', '/auth/logout')
 }

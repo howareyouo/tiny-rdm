@@ -4,55 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"tinyrdm/backend/types"
-	strutil "tinyrdm/backend/utils/string"
 )
-
-type DataConvert interface {
-	Enable() bool
-	Encode(string) (string, bool)
-	Decode(string) (string, bool)
-}
-
-var (
-	jsonConv    JsonConvert
-	uniJsonConv UnicodeJsonConvert
-	yamlConv    YamlConvert
-	xmlConv     XmlConvert
-	base64Conv  Base64Convert
-	binaryConv  BinaryConvert
-	bitSetConv  BitSetConvert
-	hexConv     HexConvert
-	gzipConv    GZipConvert
-	deflateConv DeflateConvert
-	zstdConv    ZStdConvert
-	lz4Conv     LZ4Convert
-	brotliConv  BrotliConvert
-	msgpackConv MsgpackConvert
-	phpConv     = NewPhpConvert()
-	pickleConv  = NewPickleConvert()
-)
-
-var BuildInFormatters = map[string]DataConvert{
-	types.FORMAT_JSON:         jsonConv,
-	types.FORMAT_UNICODE_JSON: uniJsonConv,
-	types.FORMAT_YAML:         yamlConv,
-	types.FORMAT_XML:          xmlConv,
-	types.FORMAT_HEX:          hexConv,
-	types.FORMAT_BINARY:       binaryConv,
-	types.FORMAT_BITSET:       bitSetConv,
-}
-
-var BuildInDecoders = map[string]DataConvert{
-	types.DECODE_BASE64:  base64Conv,
-	types.DECODE_GZIP:    gzipConv,
-	types.DECODE_DEFLATE: deflateConv,
-	types.DECODE_ZSTD:    zstdConv,
-	types.DECODE_LZ4:     lz4Conv,
-	types.DECODE_BROTLI:  brotliConv,
-	types.DECODE_MSGPACK: msgpackConv,
-	types.DECODE_PHP:     phpConv,
-	types.DECODE_PICKLE:  pickleConv,
-}
 
 // ConvertTo convert string to specified type
 // @param decodeType empty string indicates automatic detection
@@ -89,9 +41,11 @@ func decodeWith(str, decodeType string, customDecoder []CmdConvert) (value, resu
 	if len(decodeType) > 0 {
 		value = str
 
-		if buildinDecoder, ok := BuildInDecoders[decodeType]; ok {
-			if decodedStr, ok := buildinDecoder.Decode(str); ok {
-				value = decodedStr
+		if decoder, ok := decoders[decodeType]; ok {
+			if decoder.available() {
+				if decodedStr, ok := decoder.Convert.Decode(str); ok {
+					value = decodedStr
+				}
 			}
 		} else if decodeType != types.DECODE_NONE {
 			for _, decoder := range customDecoder {
@@ -118,78 +72,36 @@ func autoDecode(str string, customDecoder []CmdConvert) (value, resultDecode str
 	if len(str) > 0 {
 		// pure digit content may incorrect regard as some encoded type, skip decode
 		if match, _ := regexp.MatchString(`^\d+$`, str); !match {
-			var ok bool
-			if len(str)%4 == 0 && len(str) >= 12 && !strutil.IsSameChar(str) {
-				if value, ok = base64Conv.Decode(str); ok {
-					resultDecode = types.DECODE_BASE64
-					return
+			for _, converter := range autoDecoders {
+				// FIXME: deflate and brotli keep disabled for auto detection
+				// due to incorrect format checking
+				if !converter.canDetect(str) {
+					continue
 				}
-			}
-
-			if value, ok = gzipConv.Decode(str); ok {
-				resultDecode = types.DECODE_GZIP
-				return
-			}
-
-			// FIXME: skip decompress with deflate due to incorrect format checking
-			//if value, ok = decodeDeflate(str); ok {
-			//	resultDecode = types.DECODE_DEFLATE
-			//	return
-			//}
-
-			if value, ok = zstdConv.Decode(str); ok {
-				resultDecode = types.DECODE_ZSTD
-				return
-			}
-
-			if value, ok = lz4Conv.Decode(str); ok {
-				resultDecode = types.DECODE_LZ4
-				return
-			}
-
-			// FIXME: skip decompress with brotli due to incorrect format checking
-			//if value, ok = decodeBrotli(str); ok {
-			//	resultDecode = types.DECODE_BROTLI
-			//	return
-			//}
-
-			if value, ok = msgpackConv.Decode(str); ok {
-				resultDecode = types.DECODE_MSGPACK
-				return
-			}
-
-			if value, ok = phpConv.Decode(str); ok {
-				resultDecode = types.DECODE_PHP
-				return
-			}
-
-			if value, ok = pickleConv.Decode(str); ok {
-				resultDecode = types.DECODE_PICKLE
-				return
+				if decodedStr, ok := converter.Convert.Decode(str); ok {
+					return decodedStr, converter.Label
+				}
 			}
 
 			// try decode with custom decoder
 			for _, decoder := range customDecoder {
 				if decoder.Auto {
-					if value, ok = decoder.Decode(str); ok {
-						resultDecode = decoder.Name
-						return
+					if decodedStr, ok := decoder.Decode(str); ok {
+						return decodedStr, decoder.Name
 					}
 				}
 			}
 		}
 	}
 
-	value = str
-	resultDecode = types.DECODE_NONE
-	return
+	return str, types.DECODE_NONE
 }
 
 func viewAs(str, formatType string) (value, resultFormat string) {
 	if len(formatType) > 0 {
 		value = str
-		if buildinFormatter, ok := BuildInFormatters[formatType]; ok {
-			if formattedStr, ok := buildinFormatter.Decode(str); ok {
+		if formatter, ok := formatters[formatType]; ok {
+			if formattedStr, ok := formatter.Convert.Decode(str); ok {
 				value = formattedStr
 			}
 		}
@@ -203,39 +115,25 @@ func viewAs(str, formatType string) (value, resultFormat string) {
 // if no conversion is possible, it will return the origin string value and "plain text" type
 func autoViewAs(str string) (value, resultFormat string) {
 	if len(str) > 0 {
-		var ok bool
-		if value, ok = jsonConv.Decode(str); ok {
-			resultFormat = types.FORMAT_JSON
-			return
-		}
-
-		if value, ok = yamlConv.Decode(str); ok {
-			resultFormat = types.FORMAT_YAML
-			return
-		}
-
-		if value, ok = xmlConv.Decode(str); ok {
-			resultFormat = types.FORMAT_XML
-			return
-		}
-
-		if strutil.ContainsBinary(str) {
-			if value, ok = hexConv.Decode(str); ok {
-				resultFormat = types.FORMAT_HEX
-				return
+		for _, converter := range autoFormatters {
+			if !converter.canDetect(str) {
+				continue
+			}
+			if formattedStr, ok := converter.Convert.Decode(str); ok {
+				return formattedStr, converter.Label
 			}
 		}
 	}
 
-	value = str
-	resultFormat = types.FORMAT_RAW
-	return
+	return str, types.FORMAT_RAW
 }
 
+// SaveAs convert the displayed value back to the stored one, the format is
+// applied first and the decoder encodes the formatted content.
 func SaveAs(str, format, decode string, customDecoder []CmdConvert) (value string, err error) {
 	value = str
-	if buildingFormatter, ok := BuildInFormatters[format]; ok {
-		if formattedStr, ok := buildingFormatter.Encode(str); ok {
+	if formatter, ok := formatters[format]; ok {
+		if formattedStr, ok := formatter.Convert.Encode(value); ok {
 			value = formattedStr
 		} else {
 			err = errors.New("invalid " + format + " data")
@@ -243,8 +141,12 @@ func SaveAs(str, format, decode string, customDecoder []CmdConvert) (value strin
 		}
 	}
 
-	if buildinDecoder, ok := BuildInDecoders[decode]; ok {
-		if encodedValue, ok := buildinDecoder.Encode(str); ok {
+	if decoder, ok := decoders[decode]; ok {
+		if !decoder.available() {
+			err = errors.New("fail to build " + decode)
+			return
+		}
+		if encodedValue, ok := decoder.Convert.Encode(value); ok {
 			value = encodedValue
 		} else {
 			err = errors.New("fail to build " + decode)
@@ -253,7 +155,7 @@ func SaveAs(str, format, decode string, customDecoder []CmdConvert) (value strin
 	} else if decode != types.DECODE_NONE {
 		for _, decoder := range customDecoder {
 			if decoder.Name == decode {
-				if encodedStr, ok := decoder.Encode(str); ok {
+				if encodedStr, ok := decoder.Encode(value); ok {
 					value = encodedStr
 				} else {
 					err = errors.New("fail to build " + decode)

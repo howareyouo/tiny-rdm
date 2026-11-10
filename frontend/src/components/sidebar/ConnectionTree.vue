@@ -1,36 +1,24 @@
 <script setup>
-import useDialogStore from 'stores/dialog.js'
-import { h, markRaw, nextTick, reactive, ref } from 'vue'
-import useConnectionStore from 'stores/connections.js'
-import { NIcon, NSpace, NText, useThemeVars } from 'naive-ui'
+import { h, nextTick, ref } from 'vue'
+import { NIcon, NText } from 'naive-ui'
 import { ConnectionType } from '@/consts/connection_type.js'
 import Folder from '@/components/icons/Folder.vue'
 import Server from '@/components/icons/Server.vue'
 import Cluster from '@/components/icons/Cluster.vue'
-import { debounce, get, includes, indexOf, isEmpty, split } from 'lodash'
 import Config from '@/components/icons/Config.vue'
-import Delete from '@/components/icons/Delete.vue'
-import Unlink from '@/components/icons/Unlink.vue'
-import CopyLink from '@/components/icons/CopyLink.vue'
-import Connect from '@/components/icons/Connect.vue'
-import { useI18n } from 'vue-i18n'
-import useTabStore from 'stores/tab.js'
-import Edit from '@/components/icons/Edit.vue'
+import { debounce, get, indexOf, isEmpty } from 'lodash'
 import { hexGammaCorrection, parseHexColor, toHexColor } from '@/utils/rgb.js'
-import IconButton from '@/components/common/IconButton.vue'
-import usePreferencesStore from 'stores/preferences.js'
+import useConnectionStore from 'stores/connections.js'
 import useBrowserStore from 'stores/browser.js'
+import usePreferencesStore from 'stores/preferences.js'
 import { useRender } from '@/utils/render.js'
+import { divider, useTreeShell } from '@/components/sidebar/tree_shell.js'
+import { connectionCommands, connectionNodeContext } from '@/components/sidebar/commands.js'
 
-const themeVars = useThemeVars()
-const i18n = useI18n()
 const render = useRender()
-const connectingServer = ref('')
 const connectionStore = useConnectionStore()
 const browserStore = useBrowserStore()
-const tabStore = useTabStore()
 const prefStore = usePreferencesStore()
-const dialogStore = useDialogStore()
 
 const expandedKeys = ref([])
 const selectedKeys = ref([])
@@ -41,86 +29,49 @@ const props = defineProps({
     },
 })
 
-const contextMenuParam = reactive({
-    show: false,
-    x: 0,
-    y: 0,
-    options: null,
-    currentNode: null,
-})
+const { commands, connectingServer, cancelOpen: onCancelOpen } = connectionCommands()
 
-const menuOptions = {
-    [ConnectionType.Group]: ({ opened }) => [
-        {
-            key: 'group_rename',
-            label: 'interface.rename_conn_group',
-            icon: Edit,
-        },
-        {
-            key: 'group_delete',
-            label: 'interface.remove_conn_group',
-            icon: Delete,
-        },
-    ],
-    [ConnectionType.Server]: ({ name }) => {
-        const connected = browserStore.isConnected(name)
-        if (connected) {
-            return [
-                {
-                    key: 'server_close',
-                    label: 'interface.disconnect',
-                    icon: Unlink,
-                },
-                {
-                    key: 'server_edit',
-                    label: 'interface.edit_conn',
-                    icon: Config,
-                },
-                {
-                    key: 'server_dup',
-                    label: 'interface.dup_conn',
-                    icon: CopyLink,
-                },
-                {
-                    type: 'divider',
-                    key: 'd1',
-                },
-                {
-                    key: 'server_remove',
-                    label: 'interface.remove_conn',
-                    icon: Delete,
-                },
-            ]
-        } else {
-            return [
-                {
-                    key: 'server_open',
-                    label: 'interface.open_connection',
-                    icon: Connect,
-                },
-                {
-                    key: 'server_edit',
-                    label: 'interface.edit_conn',
-                    icon: Config,
-                },
-                {
-                    key: 'server_dup',
-                    label: 'interface.dup_conn',
-                    icon: CopyLink,
-                },
-                {
-                    type: 'divider',
-                    key: 'd1',
-                },
-                {
-                    key: 'server_remove',
-                    label: 'interface.remove_conn',
-                    icon: Delete,
-                },
-            ]
+const menu = {
+    [ConnectionType.Group]: ['group_rename', 'group_delete'],
+    [ConnectionType.Server]: (option) =>
+        browserStore.isConnected(option.name)
+            ? ['server_close', 'server_edit', 'server_dup', divider('d1'), 'server_remove']
+            : ['server_open', 'server_edit', 'server_dup', divider('d1'), 'server_remove'],
+}
+
+const buttons = {
+    [ConnectionType.Group]: [{ key: 'group_rename', icon: Config }, { key: 'group_delete' }],
+    [ConnectionType.Server]: (option) => {
+        if (browserStore.isConnected(option.name)) {
+            return [{ key: 'server_close' }, { key: 'server_edit' }]
         }
+        return [{ key: 'server_open' }, { key: 'server_edit' }, { key: 'server_remove' }]
     },
 }
+
+const {
+    contextMenuParam,
+    handleSelectContextMenu,
+    renderSuffix,
+    onNodeContextMenu,
+    onSelectedKeysUpdate,
+    onExpandedKeysUpdate,
+    run,
+    toggleExpand,
+} = useTreeShell({
+    commands,
+    menu,
+    buttons,
+    context: () => connectionNodeContext(get(selectedKeys.value, 0) || ''),
+    selection: {
+        get: () => selectedKeys.value,
+        set: (keys) => (selectedKeys.value = keys),
+    },
+    expansion: {
+        get: () => expandedKeys.value,
+        set: (keys) => (expandedKeys.value = keys),
+    },
+})
 
 /**
  * get mark color of server saved in preferences
@@ -154,22 +105,6 @@ const renderLabel = ({ option }) => {
         }
     }
     return option.label
-}
-
-// render horizontal item
-const renderIconMenu = (items) => {
-    return h(
-        NSpace,
-        {
-            align: 'center',
-            inline: true,
-            size: 3,
-            wrapItem: false,
-            wrap: false,
-            style: 'margin-right: 5px',
-        },
-        () => items,
-    )
 }
 
 const renderPrefix = ({ option }) => {
@@ -206,217 +141,19 @@ const renderPrefix = ({ option }) => {
     }
 }
 
-const getServerMenu = (connected) => {
-    const btns = []
-    if (connected) {
-        btns.push(
-            h(IconButton, {
-                tTooltip: 'interface.disconnect',
-                icon: Unlink,
-                onClick: () => handleSelectContextMenu('server_close'),
-            }),
-            h(IconButton, {
-                tTooltip: 'interface.edit_conn',
-                icon: Config,
-                onClick: () => handleSelectContextMenu('server_edit'),
-            }),
-        )
-    } else {
-        btns.push(
-            h(IconButton, {
-                tTooltip: 'interface.open_connection',
-                icon: Connect,
-                onClick: () => handleSelectContextMenu('server_open'),
-            }),
-            h(IconButton, {
-                tTooltip: 'interface.edit_conn',
-                icon: Config,
-                onClick: () => handleSelectContextMenu('server_edit'),
-            }),
-            h(IconButton, {
-                tTooltip: 'interface.remove_conn',
-                icon: Delete,
-                onClick: () => handleSelectContextMenu('server_remove'),
-            }),
-        )
-    }
-    return btns
-}
-
-const getGroupMenu = () => {
-    return [
-        h(IconButton, {
-            tTooltip: 'interface.rename_conn_group',
-            icon: Config,
-            onClick: () => handleSelectContextMenu('group_rename'),
-        }),
-        h(IconButton, {
-            tTooltip: 'interface.remove_conn_group',
-            icon: Delete,
-            onClick: () => handleSelectContextMenu('group_delete'),
-        }),
-    ]
-}
-
-const renderSuffix = ({ option }) => {
-    if (includes(selectedKeys.value, option.key)) {
-        switch (option.type) {
-            case ConnectionType.Server:
-                const connected = browserStore.isConnected(option.name)
-                return renderIconMenu(getServerMenu(connected))
-            case ConnectionType.Group:
-                return renderIconMenu(getGroupMenu())
-        }
-    }
-    return null
-}
-
-const onUpdateExpandedKeys = (keys, option) => {
-    expandedKeys.value = keys
-}
-
-const onUpdateSelectedKeys = (keys, option) => {
-    selectedKeys.value = keys
-}
-
-/**
- * Open connection
- * @param name
- * @returns {Promise<void>}
- */
-const openConnection = async (name) => {
-    try {
-        connectingServer.value = name
-        if (!browserStore.isConnected(name)) {
-            await browserStore.openConnection(name)
-        }
-        // check if connection already canceled before finish open
-        if (!isEmpty(connectingServer.value)) {
-            tabStore.upsertTab({
-                server: name,
-                db: browserStore.getSelectedDB(name),
-                forceSwitch: true,
-            })
-        }
-    } catch (e) {
-        $message.error(e.message)
-        // node.isLeaf = undefined
-    } finally {
-        connectingServer.value = ''
-    }
-}
-
-const removeConnection = (name) => {
-    $dialog.warning(
-        i18n.t('dialogue.remove_tip', { type: i18n.t('dialogue.connection.conn_name'), name }),
-        async () => {
-            connectionStore.deleteConnection(name).then(({ success, msg }) => {
-                if (!success) {
-                    $message.error(msg)
-                }
-            })
-        },
-    )
-}
-
-const removeGroup = async (name) => {
-    $dialog.warning(i18n.t('dialogue.remove_group_tip', { name }), async () => {
-        connectionStore.deleteGroup(name).then(({ success, msg }) => {
-            if (!success) {
-                $message.error(msg)
-            }
-        })
-    })
-}
-
-const expandKey = (key) => {
-    const idx = indexOf(expandedKeys.value, key)
-    if (idx === -1) {
-        expandedKeys.value.push(key)
-    } else {
-        expandedKeys.value.splice(idx, 1)
-    }
-}
-
 const nodeProps = ({ option }) => {
     return {
         onDblclick: async () => {
             if (option.type === ConnectionType.Server) {
-                openConnection(option.name).then(() => {})
+                run('server_open', option)
             } else if (option.type === ConnectionType.Group) {
                 // toggle expand
-                nextTick().then(() => expandKey(option.key))
+                nextTick().then(() => toggleExpand(option))
             }
         },
         onContextmenu(e) {
-            e.preventDefault()
-            const mop = menuOptions[option.type]
-            if (mop == null) {
-                return
-            }
-            contextMenuParam.show = false
-            nextTick().then(() => {
-                contextMenuParam.options = markRaw(mop(option))
-                contextMenuParam.currentNode = option
-                contextMenuParam.x = e.clientX
-                contextMenuParam.y = e.clientY
-                contextMenuParam.show = true
-                selectedKeys.value = [option.key]
-            })
+            onNodeContextMenu(option, e)
         },
-    }
-}
-
-const handleSelectContextMenu = (key) => {
-    contextMenuParam.show = false
-    const selectedKey = get(selectedKeys.value, 0)
-    if (selectedKey == null) {
-        return
-    }
-    const [group, name] = split(selectedKey, '/')
-    if (isEmpty(group) && isEmpty(name)) {
-        return
-    }
-    switch (key) {
-        case 'server_open':
-            openConnection(name).then(() => {})
-            break
-        case 'server_edit':
-            // ask for close relevant connections before edit
-            if (browserStore.isConnected(name)) {
-                $dialog.warning(i18n.t('dialogue.edit_close_confirm'), () => {
-                    browserStore.closeConnection(name)
-                    dialogStore.openEditDialog(name)
-                })
-            } else {
-                dialogStore.openEditDialog(name)
-            }
-            break
-        case 'server_dup':
-            dialogStore.openDuplicateDialog(name)
-            break
-        case 'server_remove':
-            removeConnection(name)
-            break
-        case 'server_close':
-            browserStore.closeConnection(name).then((closed) => {
-                if (closed) {
-                    $message.success(i18n.t('dialogue.handle_succ'))
-                }
-            })
-            break
-        case 'group_rename':
-            if (!isEmpty(group)) {
-                dialogStore.openRenameGroupDialog(group)
-            }
-            break
-        case 'group_delete':
-            if (!isEmpty(group)) {
-                removeGroup(group)
-            }
-            break
-        default:
-            console.warn('TODO: handle context menu:' + key)
     }
 }
 
@@ -477,13 +214,6 @@ const handleDrop = ({ node, dragNode, dropPosition }) => {
     connectionStore.connections = Array.from(connectionStore.connections)
     saveSort()
 }
-
-const onCancelOpen = () => {
-    if (!isEmpty(connectingServer.value)) {
-        browserStore.closeConnection(connectingServer.value)
-        connectingServer.value = ''
-    }
-}
 </script>
 
 <template>
@@ -505,8 +235,8 @@ const onCancelOpen = () => {
             class="fill-height"
             virtual-scroll
             @drop="handleDrop"
-            @update:selected-keys="onUpdateSelectedKeys"
-            @update:expanded-keys="onUpdateExpandedKeys">
+            @update:selected-keys="onSelectedKeysUpdate"
+            @update:expanded-keys="onExpandedKeysUpdate">
             <template #empty>
                 <n-empty :description="$t('interface.empty_server_list')" class="empty-content" />
             </template>

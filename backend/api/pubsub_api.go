@@ -5,7 +5,6 @@ package api
 import (
 	"net/http"
 	"tinyrdm/backend/services"
-	"tinyrdm/backend/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,8 +18,7 @@ func registerPubsubRoutes(rg *gin.RouterGroup) {
 			Channel string `json:"channel"`
 			Payload string `json:"payload"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Pubsub().Publish(req.Server, req.Channel, req.Payload))
@@ -30,8 +28,7 @@ func registerPubsubRoutes(rg *gin.RouterGroup) {
 		var req struct {
 			Server string `json:"server"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Pubsub().StartSubscribe(req.Server))
@@ -41,8 +38,7 @@ func registerPubsubRoutes(rg *gin.RouterGroup) {
 		var req struct {
 			Server string `json:"server"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, types.JSResp{Msg: "invalid request"})
+		if !bind(c, &req) {
 			return
 		}
 		c.JSON(http.StatusOK, services.Pubsub().StopSubscribe(req.Server))

@@ -17,12 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"tinyrdm/backend/consts"
 	"tinyrdm/backend/types"
-	"tinyrdm/backend/utils/coll"
 	convutil "tinyrdm/backend/utils/convert"
-	maputil "tinyrdm/backend/utils/map"
-	redis2 "tinyrdm/backend/utils/redis"
 	sliceutil "tinyrdm/backend/utils/slice"
 	strutil "tinyrdm/backend/utils/string"
 
@@ -39,7 +35,6 @@ type slowLogItem struct {
 
 type entryCursor struct {
 	DB      int
-	Type    string
 	Key     string
 	Pattern string
 	Cursor  uint64
@@ -47,20 +42,19 @@ type entryCursor struct {
 }
 
 type connectionItem struct {
-	client      redis.UniversalClient
-	ctx         context.Context
-	cancelFunc  context.CancelFunc
+	*sessionItem
+	mutex       sync.Mutex
 	cursor      map[int]uint64      // current cursor of databases
 	entryCursor map[int]entryCursor // current entry cursor of databases
-	stepSize    int64
-	db          int // current database index
 }
 
 type browserService struct {
 	ctx        context.Context
+	session    *redisSession
 	connMap    map[string]*connectionItem
 	cmdHistory []cmdHistoryItem
-	mutex      sync.Mutex
+	cmdMutex   sync.Mutex // guards cmdHistory, must not be b.mutex (the command hook fires while getRedisClient holds b.mutex)
+	mutex      sync.Mutex // guards connMap
 }
 
 var browser *browserService
@@ -72,6 +66,16 @@ func Browser() *browserService {
 			browser = &browserService{
 				connMap: map[string]*connectionItem{},
 			}
+			browser.session = newRedisSession(func(server, cmd string, cost int64) {
+				browser.cmdMutex.Lock()
+				defer browser.cmdMutex.Unlock()
+				browser.cmdHistory = append(browser.cmdHistory, cmdHistoryItem{
+					Timestamp: time.Now().UnixMilli(),
+					Server:    server,
+					Cmd:       cmd,
+					Cost:      cost,
+				})
+			})
 		})
 	}
 	return browser
@@ -79,18 +83,24 @@ func Browser() *browserService {
 
 func (b *browserService) Start(ctx context.Context) {
 	b.ctx = ctx
+	b.session.Start(ctx)
 }
 
 func (b *browserService) Stop() {
-	for _, item := range b.connMap {
-		if item.client != nil {
-			if item.cancelFunc != nil {
-				item.cancelFunc()
-			}
-			item.client.Close()
-		}
-	}
+	b.session.closeAll()
+	b.mutex.Lock()
 	b.connMap = map[string]*connectionItem{}
+	b.mutex.Unlock()
+}
+
+// CloseConnection close redis server connection
+func (b *browserService) CloseConnection(name string) (resp types.JSResp) {
+	b.session.close(name)
+	b.mutex.Lock()
+	delete(b.connMap, name)
+	b.mutex.Unlock()
+	resp.Success = true
+	return
 }
 
 // OpenConnection open redis server connection
@@ -211,9 +221,12 @@ func (b *browserService) OpenConnection(name string) (resp types.JSResp) {
 				dbs = append(dbs, queryDB(idx))
 			}
 		case "hide":
-			hiddenList := coll.NewSet(selConn.DBFilterList...)
+			hiddenList := map[int]struct{}{}
+			for _, idx := range selConn.DBFilterList {
+				hiddenList[idx] = struct{}{}
+			}
 			for idx := 0; idx < totaldb; idx++ {
-				if !hiddenList.Contains(idx) {
+				if _, hidden := hiddenList[idx]; !hidden {
 					dbs = append(dbs, queryDB(idx))
 				}
 			}
@@ -228,11 +241,14 @@ func (b *browserService) OpenConnection(name string) (resp types.JSResp) {
 	var version string
 	if res, err := client.Info(ctx, "server").Result(); err == nil || errors.Is(err, redis.Nil) {
 		info := b.parseInfo(res)
-		serverInfo := maputil.Get(info, "Server", map[string]string{})
+		serverInfo := info["Server"]
 		// Prefer valkey_version if present, fallback to redis_version
-		version = maputil.Get(serverInfo, "valkey_version", "")
+		version = serverInfo["valkey_version"]
 		if version == "" {
-			version = maputil.Get(serverInfo, "redis_version", "1.0.0")
+			version = serverInfo["redis_version"]
+		}
+		if version == "" {
+			version = "1.0.0"
 		}
 	}
 
@@ -246,136 +262,41 @@ func (b *browserService) OpenConnection(name string) (resp types.JSResp) {
 	return
 }
 
-// CloseConnection close redis server connection
-func (b *browserService) CloseConnection(name string) (resp types.JSResp) {
-	if item, ok := b.connMap[name]; ok {
-		delete(b.connMap, name)
-		if item.cancelFunc != nil {
-			item.cancelFunc()
-		}
-		if item.client != nil {
-			item.client.Close()
-		}
-	}
-	resp.Success = true
-	return
-}
-
-func (b *browserService) createRedisClient(ctx context.Context, selConn types.ConnectionConfig) (client redis.UniversalClient, err error) {
-	hook := redis2.NewHook(selConn.Name, func(cmd string, cost int64) {
-		now := time.Now()
-		//last := strings.LastIndex(cmd, ":")
-		//if last != -1 {
-		//	cmd = cmd[:last]
-		//}
-		b.cmdHistory = append(b.cmdHistory, cmdHistoryItem{
-			Timestamp: now.UnixMilli(),
-			Server:    selConn.Name,
-			Cmd:       cmd,
-			Cost:      cost,
-		})
-	})
-
-	client, err = Connection().createRedisClient(selConn)
-	if err != nil {
-		err = fmt.Errorf("create conenction error: %s", err.Error())
-		return
-	}
-
-	_ = client.Do(ctx, "CLIENT", "SETNAME", url.QueryEscape(selConn.Name)).Err()
-	// add hook to each node in cluster mode
-	if cluster, ok := client.(*redis.ClusterClient); ok {
-		err = cluster.ForEachShard(ctx, func(ctx context.Context, cli *redis.Client) error {
-			cli.AddHook(hook)
-			return nil
-		})
-		if err != nil {
-			err = fmt.Errorf("get cluster nodes error: %s", err.Error())
-			return
-		}
-	} else {
-		client.AddHook(hook)
-	}
-
-	if _, err = client.Ping(ctx).Result(); err != nil && !errors.Is(err, redis.Nil) {
-		err = errors.New("can not connect to redis server:" + err.Error())
-		return
-	}
-	return
-}
-
 // get a redis client from local cache or create a new one
 // if db >= 0, it will also switch to target database index
-func (b *browserService) getRedisClient(server string, db int) (item *connectionItem, err error) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-
-	var ok bool
-	var client redis.UniversalClient
-	if item, ok = b.connMap[server]; ok {
-		if item.db == db || db < 0 {
-			// return without switch database directly
-			return
-		}
-
-		// close previous connection if database is not the same
-		if item.cancelFunc != nil {
-			item.cancelFunc()
-		}
-		item.client.Close()
-		delete(b.connMap, server)
-	}
-
-	// recreate new connection after switch database
-	selConn := Connection().getConnection(server)
-	if selConn == nil {
-		err = fmt.Errorf("no match connection \"%s\"", server)
-		delete(b.connMap, server)
-		return
-	}
-
-	ctx, cancelFunc := context.WithCancel(b.ctx)
-	b.connMap[server] = &connectionItem{
-		ctx:        ctx,
-		cancelFunc: cancelFunc,
-	}
-	var connConfig = selConn.ConnectionConfig
-	connConfig.LastDB = db
-	client, err = b.createRedisClient(ctx, connConfig)
+func (b *browserService) getRedisClient(server string, db int) (*connectionItem, error) {
+	sess, err := b.session.get(server, db)
 	if err != nil {
-		delete(b.connMap, server)
-		return
+		return nil, err
 	}
-	item = &connectionItem{
-		client:      client,
-		ctx:         ctx,
-		cancelFunc:  cancelFunc,
-		cursor:      map[int]uint64{},
-		entryCursor: map[int]entryCursor{},
-		stepSize:    int64(selConn.LoadSize),
-		db:          db,
-	}
-	if item.stepSize <= 0 {
-		item.stepSize = consts.DEFAULT_LOAD_SIZE
-	}
-	b.connMap[server] = item
-	return
+	return b.getPagingItem(sess), nil
 }
 
 // get redis client and try to reset selected database when not exists
 func (b *browserService) getRedisClient2(server string, db int) (item *connectionItem, selecetdDB int, err error) {
-	selecetdDB = db
-	item, err = b.getRedisClient(server, db)
+	sess, selecetdDB, err := b.session.getWithDBFallback(server, db)
 	if err != nil {
-		if strings.Contains(err.Error(), "DB index is out of range") && db != 0 {
-			if item, err = b.getRedisClient(server, 0); err != nil {
-				item = nil
-			} else {
-				selecetdDB = 0
-			}
-		}
+		item = nil
+		return
 	}
+	item = b.getPagingItem(sess)
 	return
+}
+
+// getPagingItem returns the paging state of a session, fresh cursor maps are created after a redial
+func (b *browserService) getPagingItem(sess *sessionItem) *connectionItem {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if item, ok := b.connMap[sess.name]; ok && item.sessionItem == sess {
+		return item
+	}
+	item := &connectionItem{
+		sessionItem: sess,
+		cursor:      map[int]uint64{},
+		entryCursor: map[int]entryCursor{},
+	}
+	b.connMap[sess.name] = item
+	return item
 }
 
 // load current database size
@@ -386,12 +307,53 @@ func (b *browserService) loadDBSize(ctx context.Context, client redis.UniversalC
 
 // save current scan cursor
 func (b *browserService) setClientCursor(server string, db int, cursor uint64) {
-	if _, ok := b.connMap[server]; ok {
-		if cursor == 0 {
-			delete(b.connMap[server].cursor, db)
-		} else {
-			b.connMap[server].cursor[db] = cursor
+	b.mutex.Lock()
+	item, ok := b.connMap[server]
+	b.mutex.Unlock()
+	if ok {
+		item.setClientCursor(db, cursor)
+	}
+}
+
+// setClientCursor saves the scan cursor of a database
+func (item *connectionItem) setClientCursor(db int, cursor uint64) {
+	item.mutex.Lock()
+	defer item.mutex.Unlock()
+	if cursor == 0 {
+		delete(item.cursor, db)
+	} else {
+		item.cursor[db] = cursor
+	}
+}
+
+// getEntryCursor returns the entry cursor of a database, it is reset when the key or match pattern changed
+func (item *connectionItem) getEntryCursor(db int, key, pattern string) (cursor uint64, xlast string, reset bool) {
+	item.mutex.Lock()
+	defer item.mutex.Unlock()
+	entry, ok := item.entryCursor[db]
+	if !ok || entry.Key != key || entry.Pattern != pattern {
+		// not the same key or match pattern, reset cursor
+		entry = entryCursor{
+			DB:      db,
+			Key:     key,
+			Pattern: pattern,
 		}
+		item.entryCursor[db] = entry
+		return 0, "", true
+	}
+	return entry.Cursor, entry.XLast, false
+}
+
+// setEntryCursor saves the entry cursor of a database, the caller decides both the scan cursor and the last stream pos
+func (item *connectionItem) setEntryCursor(db int, key, pattern string, cursor uint64, xlast string) {
+	item.mutex.Lock()
+	defer item.mutex.Unlock()
+	item.entryCursor[db] = entryCursor{
+		DB:      db,
+		Key:     key,
+		Pattern: pattern,
+		Cursor:  cursor,
+		XLast:   xlast,
 	}
 }
 
@@ -791,7 +753,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 		return
 	}
 
-	client, ctx, entryCors := item.client, item.ctx, item.entryCursor
+	client, ctx := item.client, item.ctx
 	key := strutil.DecodeRedisKey(param.Key)
 	var keyType string
 	keyType, err = client.Type(ctx, key).Result()
@@ -818,43 +780,6 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 		matchPattern = "*"
 	}
 
-	// define get entry cursor function
-	getEntryCursor := func() (uint64, string, bool) {
-		if entry, ok := entryCors[param.DB]; !ok || entry.Key != key || entry.Pattern != matchPattern {
-			// not the same key or match pattern, reset cursor
-			entry = entryCursor{
-				DB:      param.DB,
-				Key:     key,
-				Pattern: matchPattern,
-				Cursor:  0,
-			}
-			entryCors[param.DB] = entry
-			return 0, "", true
-		} else {
-			return entry.Cursor, entry.XLast, false
-		}
-	}
-	// define set entry cursor function
-	setEntryCursor := func(cursor uint64) {
-		entryCors[param.DB] = entryCursor{
-			DB:      param.DB,
-			Type:    "",
-			Key:     key,
-			Pattern: matchPattern,
-			Cursor:  cursor,
-		}
-	}
-	// define set last stream pos function
-	setEntryXLast := func(last string) {
-		entryCors[param.DB] = entryCursor{
-			DB:      param.DB,
-			Type:    "",
-			Key:     key,
-			Pattern: matchPattern,
-			XLast:   last,
-		}
-	}
-
 	decoder := Preferences().GetDecoder()
 
 	switch data.KeyType {
@@ -879,7 +804,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 				if param.Reset {
 					cursor, reset = 0, true
 				} else {
-					cursor, _, reset = getEntryCursor()
+					cursor, _, reset = item.getEntryCursor(param.DB, key, matchPattern)
 				}
 				scanSize := int64(Preferences().GetScanSize())
 				loadVal, subErr = client.LRange(ctx, key, int64(cursor), int64(cursor)+scanSize-1).Result()
@@ -888,7 +813,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 					cursor = 0
 				}
 			}
-			setEntryCursor(cursor)
+			item.setEntryCursor(param.DB, key, matchPattern, cursor, "")
 
 			items := make([]types.ListEntryItem, 0, len(loadVal))
 			for _, val := range loadVal {
@@ -960,7 +885,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 				if param.Reset {
 					cursor, reset = 0, true
 				} else {
-					cursor, _, reset = getEntryCursor()
+					cursor, _, reset = item.getEntryCursor(param.DB, key, matchPattern)
 				}
 				loadedVal, cursor, subErr = client.HScan(ctx, key, cursor, matchPattern, scanSize).Result()
 				if subErr != nil {
@@ -978,7 +903,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 					}
 				}
 			}
-			setEntryCursor(cursor)
+			item.setEntryCursor(param.DB, key, matchPattern, cursor, "")
 			return items, reset, cursor == 0, nil
 		}
 
@@ -1030,7 +955,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 				if param.Reset {
 					cursor, reset = 0, true
 				} else {
-					cursor, _, reset = getEntryCursor()
+					cursor, _, reset = item.getEntryCursor(param.DB, key, matchPattern)
 				}
 				loadedKey, cursor, subErr = client.SScan(ctx, key, cursor, matchPattern, scanSize).Result()
 				items = make([]types.SetEntryItem, len(loadedKey))
@@ -1043,7 +968,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 					}
 				}
 			}
-			setEntryCursor(cursor)
+			item.setEntryCursor(param.DB, key, matchPattern, cursor, "")
 			return items, reset, cursor == 0, nil
 		}
 
@@ -1099,7 +1024,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 				if param.Reset {
 					cursor, reset = 0, true
 				} else {
-					cursor, _, reset = getEntryCursor()
+					cursor, _, reset = item.getEntryCursor(param.DB, key, matchPattern)
 				}
 				var loadedVal []redis.Z
 				loadedVal, err = client.ZRangeWithScores(ctx, key, int64(cursor), int64(cursor)+scanSize-1).Result()
@@ -1132,7 +1057,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 					}
 				}
 			}
-			setEntryCursor(cursor)
+			item.setEntryCursor(param.DB, key, matchPattern, cursor, "")
 			return items, reset, cursor == 0, nil
 		}
 
@@ -1158,7 +1083,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 				if param.Reset {
 					last = ""
 				} else {
-					_, last, reset = getEntryCursor()
+					_, last, reset = item.getEntryCursor(param.DB, key, matchPattern)
 				}
 				if len(last) <= 0 {
 					last = "+"
@@ -1177,7 +1102,7 @@ func (b *browserService) GetKeyDetail(param types.KeyDetailParam) (resp types.JS
 					last = msgs[scanCount-1].ID
 				}
 			}
-			setEntryXLast(last)
+			item.setEntryCursor(param.DB, key, matchPattern, 0, last)
 			items := make([]types.StreamEntryItem, 0, len(msgs))
 			for _, msg := range msgs {
 				it := types.StreamEntryItem{
@@ -2104,7 +2029,7 @@ func (b *browserService) BatchSetTTL(server string, db int, ks []any, ttl int64,
 			} else {
 				expErr = cli.ExpireAt(ctx, key, expiration).Err()
 			}
-			if err != nil {
+			if expErr != nil {
 				failed.Add(1)
 			} else {
 				// save deleted key
@@ -2657,6 +2582,8 @@ func (b *browserService) RenameKey(server string, db int, key, newKey string) (r
 // GetCmdHistory get redis command history
 func (b *browserService) GetCmdHistory(pageNo, pageSize int) (resp types.JSResp) {
 	resp.Success = true
+	b.cmdMutex.Lock()
+	defer b.cmdMutex.Unlock()
 	if pageSize <= 0 || pageNo <= 0 {
 		// return all history
 		resp.Data = map[string]any{
@@ -2679,7 +2606,9 @@ func (b *browserService) GetCmdHistory(pageNo, pageSize int) (resp types.JSResp)
 
 // CleanCmdHistory clean redis command history
 func (b *browserService) CleanCmdHistory() (resp types.JSResp) {
+	b.cmdMutex.Lock()
 	b.cmdHistory = []cmdHistoryItem{}
+	b.cmdMutex.Unlock()
 	resp.Success = true
 	return
 }

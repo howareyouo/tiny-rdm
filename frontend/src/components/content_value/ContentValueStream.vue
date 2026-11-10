@@ -13,6 +13,7 @@ import LoadList from '@/components/icons/LoadList.vue'
 import LoadAll from '@/components/icons/LoadAll.vue'
 import IconButton from '@/components/common/IconButton.vue'
 import ContentSearchInput from '@/components/content_value/ContentSearchInput.vue'
+import FormatSelector from '@/components/content_value/FormatSelector.vue'
 import { formatBytes } from '@/utils/byte_convert.js'
 import { ClipboardSetText } from 'wailsjs/runtime/runtime.js'
 
@@ -37,7 +38,7 @@ const props = defineProps({
     },
     size: Number,
     length: Number,
-    viewAs: {
+    format: {
         type: String,
         default: formatTypes.RAW,
     },
@@ -49,7 +50,7 @@ const props = defineProps({
     loading: Boolean,
 })
 
-const emit = defineEmits(['loadmore', 'loadall', 'match'])
+const emit = defineEmits(['loadmore', 'loadall', 'reload', 'match'])
 
 /**
  *
@@ -167,6 +168,10 @@ const onUpdateFilter = (filters, sourceColumn) => {
     valueFilterOption.value = filters[sourceColumn.key]
 }
 
+const onFormatChanged = (selDecode, selFormat) => {
+    emit('reload', selDecode, selFormat)
+}
+
 const searchInputRef = ref(null)
 defineExpose({
     reset: () => {
@@ -242,6 +247,10 @@ defineExpose({
             <n-divider v-if="showMemoryUsage" vertical />
             <n-text v-if="showMemoryUsage">{{ $t('interface.memory_usage') }}: {{ formatBytes(props.size) }}</n-text>
             <div class="flex-item-expand"></div>
+            <format-selector
+                :decode="props.decode"
+                :format="props.format"
+                @format-changed="onFormatChanged" />
         </div>
     </div>
 </template>

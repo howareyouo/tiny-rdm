@@ -9,10 +9,6 @@ import (
 
 type LZ4Convert struct{}
 
-func (LZ4Convert) Enable() bool {
-	return true
-}
-
 func (LZ4Convert) Encode(str string) (string, bool) {
 	var compress = func(b []byte) (string, error) {
 		var buf bytes.Buffer

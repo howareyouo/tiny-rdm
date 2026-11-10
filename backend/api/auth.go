@@ -14,9 +14,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"tinyrdm/backend/types"
 
 	"github.com/gin-gonic/gin"
 )
+
+// authCookieName is the cookie carrying the session token
+const authCookieName = "rdm_token"
 
 // Auth configuration
 var (
@@ -120,11 +124,6 @@ func InitAuth() {
 	}
 }
 
-// IsAuthEnabled returns whether authentication is enabled
-func IsAuthEnabled() bool {
-	return authEnabled
-}
-
 // Simple JWT-like token: header.payload.signature (HMAC-SHA256)
 type tokenPayload struct {
 	User string `json:"u"`
@@ -196,24 +195,30 @@ func getClientIP(c *gin.Context) string {
 	return c.ClientIP()
 }
 
+// tokenFromCookie returns the session token carried by the request cookie
+func tokenFromCookie(c *gin.Context) string {
+	token, err := c.Cookie(authCookieName)
+	if err != nil {
+		return ""
+	}
+	return token
+}
+
+// isAuthenticated reports whether the request carries a valid session token
+func isAuthenticated(c *gin.Context) bool {
+	if !authEnabled {
+		return true
+	}
+	return validateToken(tokenFromCookie(c), getClientIP(c))
+}
+
 // AuthMiddleware protects API routes
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !authEnabled {
-			c.Next()
+		if !isAuthenticated(c) {
+			fail(c, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-
-		// Get token from cookie
-		token, err := c.Cookie("rdm_token")
-		if err != nil || !validateToken(token, getClientIP(c)) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"msg":     "unauthorized",
-			})
-			return
-		}
-
 		c.Next()
 	}
 }
@@ -242,10 +247,7 @@ func handleLogin(c *gin.Context) {
 
 	// Rate limiting
 	if !loginLimiter.allow(ip) {
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"success": false,
-			"msg":     "too many login attempts, please try again later",
-		})
+		fail(c, http.StatusTooManyRequests, "too many login attempts, please try again later")
 		return
 	}
 
@@ -253,8 +255,7 @@ func handleLogin(c *gin.Context) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": "invalid request"})
+	if !bind(c, &req) {
 		return
 	}
 
@@ -265,7 +266,7 @@ func handleLogin(c *gin.Context) {
 	if !userOK || !passOK {
 		// Delay to slow down brute force
 		time.Sleep(500 * time.Millisecond)
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "msg": "invalid credentials"})
+		fail(c, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
@@ -274,11 +275,11 @@ func handleLogin(c *gin.Context) {
 	// Set httpOnly, secure cookie
 	secure := c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
 	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie("rdm_token", token, int(sessionTTL.Seconds()), "/", "", secure, true)
+	c.SetCookie(authCookieName, token, int(sessionTTL.Seconds()), "/", "", secure, true)
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
+	c.JSON(http.StatusOK, types.JSResp{
+		Success: true,
+		Data: gin.H{
 			"expires": exp.Unix(),
 		},
 	})
@@ -286,24 +287,13 @@ func handleLogin(c *gin.Context) {
 
 func handleLogout(c *gin.Context) {
 	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie("rdm_token", "", -1, "/", "", false, true)
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	c.SetCookie(authCookieName, "", -1, "/", "", false, true)
+	c.JSON(http.StatusOK, types.JSResp{Success: true})
 }
 
 func handleAuthStatus(c *gin.Context) {
-	if !authEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data":    gin.H{"enabled": false, "authenticated": true},
-		})
-		return
-	}
-
-	token, err := c.Cookie("rdm_token")
-	authenticated := err == nil && validateToken(token, getClientIP(c))
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    gin.H{"enabled": true, "authenticated": authenticated},
+	c.JSON(http.StatusOK, types.JSResp{
+		Success: true,
+		Data:    gin.H{"enabled": authEnabled, "authenticated": isAuthenticated(c)},
 	})
 }

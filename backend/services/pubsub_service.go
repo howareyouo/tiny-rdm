@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -14,9 +13,7 @@ import (
 type pubsubItem struct {
 	client    redis.UniversalClient
 	pubsub    *redis.PubSub
-	mutex     sync.Mutex
-	closeCh   chan struct{}
-	eventName string
+	stream    *serverStream
 }
 
 type subMessage struct {
@@ -28,6 +25,7 @@ type subMessage struct {
 type pubsubService struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+	session   *redisSession
 	mutex     sync.Mutex
 	items     map[string]*pubsubItem
 }
@@ -39,38 +37,17 @@ func Pubsub() *pubsubService {
 	if pubsub == nil {
 		oncePubsub.Do(func() {
 			pubsub = &pubsubService{
-				items: map[string]*pubsubItem{},
+				session: newRedisSession(nil),
+				items:   map[string]*pubsubItem{},
 			}
 		})
 	}
 	return pubsub
 }
 
-func (p *pubsubService) getItem(server string) (*pubsubItem, error) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	item, ok := p.items[server]
-	if !ok {
-		var err error
-		conf := Connection().getConnection(server)
-		if conf == nil {
-			return nil, fmt.Errorf("no connection profile named: %s", server)
-		}
-		var uniClient redis.UniversalClient
-		if uniClient, err = Connection().createRedisClient(conf.ConnectionConfig); err != nil {
-			return nil, err
-		}
-		item = &pubsubItem{
-			client: uniClient,
-		}
-		p.items[server] = item
-	}
-	return item, nil
-}
-
 func (p *pubsubService) Start(ctx context.Context) {
 	p.ctx, p.ctxCancel = context.WithCancel(ctx)
+	p.session.Start(ctx)
 }
 
 // Publish publish message to channel
@@ -99,61 +76,55 @@ func (p *pubsubService) Publish(server, channel, payload string) (resp types.JSR
 
 // StartSubscribe start to subscribe a channel
 func (p *pubsubService) StartSubscribe(server string) (resp types.JSResp) {
-	item, err := p.getItem(server)
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	// stop the previous subscription if it is still running
+	if item, ok := p.items[server]; ok && item.stream != nil {
+		item.stream.stop(func() {
+			item.pubsub.Close()
+		})
+		p.session.close(server)
+		delete(p.items, server)
+	}
+
+	sess, err := p.session.get(server, -1)
 	if err != nil {
 		resp.Msg = err.Error()
 		return
 	}
 
-	item.closeCh = make(chan struct{})
-	item.eventName = "sub:" + strconv.Itoa(int(time.Now().Unix()))
-	item.pubsub = item.client.PSubscribe(p.ctx, "*")
+	item := &pubsubItem{
+		client: sess.client,
+	}
+	item.stream = newServerStream(p.ctx, "sub:"+strconv.FormatInt(time.Now().UnixNano(), 10), 300, 300*time.Millisecond)
+	item.pubsub = sess.client.PSubscribe(p.ctx, "*")
+	p.items[server] = item
 
-	go p.processSubscribe(&item.mutex, item.pubsub.Channel(), item.closeCh, item.eventName)
+	go p.processSubscribe(item.stream, item.pubsub.Channel())
 	resp.Success = true
 	resp.Data = struct {
 		EventName string `json:"eventName"`
 	}{
-		EventName: item.eventName,
+		EventName: item.stream.eventName,
 	}
 	return
 }
 
-func (p *pubsubService) processSubscribe(mutex *sync.Mutex, ch <-chan *redis.Message, closeCh <-chan struct{}, eventName string) {
-	cache := make([]subMessage, 0, 1000)
-	ticker := time.NewTicker(300 * time.Millisecond)
-	defer ticker.Stop()
-
+func (p *pubsubService) processSubscribe(stream *serverStream, ch <-chan *redis.Message) {
 	for {
 		select {
 		case data := <-ch:
-			go func() {
-				timestamp := time.Now().UnixMilli()
-				mutex.Lock()
-				defer mutex.Unlock()
-				cache = append(cache, subMessage{
-					Timestamp: timestamp,
-					Channel:   data.Channel,
-					Message:   data.Payload,
-				})
-				if len(cache) > 300 {
-					EventsEmit(p.ctx, eventName, cache)
-					cache = cache[:0:cap(cache)]
-				}
-			}()
-
-		case <-ticker.C:
-			func() {
-				mutex.Lock()
-				defer mutex.Unlock()
-				if len(cache) > 0 {
-					EventsEmit(p.ctx, eventName, cache)
-					cache = cache[:0:cap(cache)]
-				}
-			}()
-
-		case <-closeCh:
-			// subscribe stopped
+			if data == nil {
+				// subscription closed
+				return
+			}
+			stream.push(subMessage{
+				Timestamp: time.Now().UnixMilli(),
+				Channel:   data.Channel,
+				Message:   data.Payload,
+			})
+		case <-stream.closeCh:
 			return
 		}
 	}
@@ -165,14 +136,15 @@ func (p *pubsubService) StopSubscribe(server string) (resp types.JSResp) {
 	defer p.mutex.Unlock()
 
 	item, ok := p.items[server]
-	if !ok || item.pubsub == nil {
+	if !ok || item.stream == nil {
 		resp.Success = true
 		return
 	}
 
-	//item.pubsub.Unsubscribe(p.ctx, "*")
-	item.pubsub.Close()
-	close(item.closeCh)
+	item.stream.stop(func() {
+		item.pubsub.Close()
+	})
+	p.session.close(server)
 	delete(p.items, server)
 	resp.Success = true
 	return

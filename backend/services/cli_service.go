@@ -16,8 +16,8 @@ import (
 type cliService struct {
 	ctx        context.Context
 	ctxCancel  context.CancelFunc
+	session    *redisSession
 	mutex      sync.Mutex
-	clients    map[string]redis.UniversalClient
 	selectedDB map[string]int
 }
 
@@ -34,7 +34,7 @@ func Cli() *cliService {
 	if cli == nil {
 		onceCli.Do(func() {
 			cli = &cliService{
-				clients:    map[string]redis.UniversalClient{},
+				session:    newRedisSession(nil),
 				selectedDB: map[string]int{},
 			}
 		})
@@ -88,26 +88,16 @@ func (c *cliService) echoError(server, data string) {
 }
 
 func (c *cliService) getRedisClient(server string) (redis.UniversalClient, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	client, ok := c.clients[server]
-	if !ok {
-		var err error
-		conf := Connection().getConnection(server)
-		if conf == nil {
-			return nil, fmt.Errorf("no connection profile named: %s", server)
-		}
-		if client, err = Connection().createRedisClient(conf.ConnectionConfig); err != nil {
-			return nil, err
-		}
-		c.clients[server] = client
+	item, err := c.session.get(server, -1)
+	if err != nil {
+		return nil, err
 	}
-	return client, nil
+	return item.client, nil
 }
 
 func (c *cliService) Start(ctx context.Context) {
 	c.ctx, c.ctxCancel = context.WithCancel(ctx)
+	c.session.Start(ctx)
 }
 
 // StartCli start a cli session
@@ -139,14 +129,10 @@ func (c *cliService) StartCli(server string, db int) (resp types.JSResp) {
 
 // CloseCli close cli session
 func (c *cliService) CloseCli(server string) (resp types.JSResp) {
+	c.session.close(server)
 	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	if client, ok := c.clients[server]; ok {
-		client.Close()
-		delete(c.clients, server)
-		delete(c.selectedDB, server)
-	}
+	delete(c.selectedDB, server)
+	c.mutex.Unlock()
 	EventsOff(c.ctx, "cmd:input:"+server)
 	resp.Success = true
 	return
@@ -158,7 +144,8 @@ func (c *cliService) CloseAll() {
 		c.ctxCancel()
 	}
 
-	for server := range c.clients {
+	for server := range c.selectedDB {
 		c.CloseCli(server)
 	}
+	c.session.closeAll()
 }

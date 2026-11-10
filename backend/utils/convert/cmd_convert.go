@@ -17,10 +17,6 @@ type CmdConvert struct {
 
 const replaceholder = "{VALUE}"
 
-func (c CmdConvert) Enable() bool {
-	return true
-}
-
 func (c CmdConvert) Encode(str string) (string, bool) {
 	base64Content := base64.StdEncoding.EncodeToString([]byte(str))
 	var containHolder bool

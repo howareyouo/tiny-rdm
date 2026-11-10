@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
 `
 
-func NewPickleConvert() *PickleConvert {
+func NewPickleConvert() DataConvert {
 	c := CmdConvert{
 		Name: "Pickle",
 		Auto: true,
@@ -88,25 +88,4 @@ func NewPickleConvert() *PickleConvert {
 	return &PickleConvert{
 		CmdConvert: c,
 	}
-}
-
-func (p *PickleConvert) Enable() bool {
-	if p == nil {
-		return false
-	}
-	return true
-}
-
-func (p *PickleConvert) Encode(str string) (string, bool) {
-	if !p.Enable() {
-		return str, false
-	}
-	return p.CmdConvert.Encode(str)
-}
-
-func (p *PickleConvert) Decode(str string) (string, bool) {
-	if !p.Enable() {
-		return str, false
-	}
-	return p.CmdConvert.Decode(str)
 }

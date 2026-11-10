@@ -7,10 +7,6 @@ import (
 
 type XmlConvert struct{}
 
-func (XmlConvert) Enable() bool {
-	return true
-}
-
 func (XmlConvert) Encode(str string) (string, bool) {
 	return str, true
 }
